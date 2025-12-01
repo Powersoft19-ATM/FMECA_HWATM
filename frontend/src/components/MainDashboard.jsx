@@ -7,7 +7,6 @@ function MainDashboard({ boards, onBoardSelect }) {
       <h3 className="dashboard-subtitle">
         Select a Board to View FMECA Analysis
       </h3>
-
       <div className="board-grid">
         {boards.map((board) => (
           <div
