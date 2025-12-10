@@ -1,35 +1,77 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
+import { URL } from "../../config";
 
 function FMECAAnalysis({ boardId, boardName, onBack }) {
   const [activeFilter, setActiveFilter] = useState("all");
   const [fmecaData, setFmecaData] = useState([]);
   const [atmData, setAtmData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const fetchWithAuth = async (url, data = null, method = "get") => {
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      window.location.href = "/";
+      return null;
+    }
+
+    const config = {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Cache-Control": "no-cache",
+      },
+    };
+
+    try {
+      let response;
+      if (method === "post") {
+        response = await axios.post(url, data, config);
+      } else {
+        response = await axios.get(url, config);
+      }
+      return response;
+    } catch (err) {
+      if (err.response?.status === 401) {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("username");
+        window.location.href = "/";
+      }
+      throw err;
+    }
+  };
 
   useEffect(() => {
-    if (activeFilter === "atm") {
-      fetchATMData();
-    } else {
-      fetchFMECAData();
+    if (boardId) {
+      if (activeFilter === "atm") {
+        fetchATMData();
+      } else {
+        fetchFMECAData();
+      }
     }
   }, [activeFilter, boardId]);
 
   const fetchFMECAData = async () => {
     setLoading(true);
+    setError("");
     try {
-      const response = await axios.post(
-        `http://localhost:8000/fmeca-data/${boardId}`,
+      const response = await fetchWithAuth(
+        `${URL}/fmeca-data/${boardId}`,
         {
           board_id: boardId,
           filter_type: activeFilter,
-        }
+        },
+        "post"
       );
-      setFmecaData(response.data.data);
-      setAtmData(null);
+
+      if (response) {
+        setFmecaData(response.data.data || []);
+        setAtmData(null);
+      }
     } catch (error) {
       console.error("Error fetching FMECA data:", error);
       setFmecaData([]);
+      setError("Failed to load data. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -37,15 +79,18 @@ function FMECAAnalysis({ boardId, boardName, onBack }) {
 
   const fetchATMData = async () => {
     setLoading(true);
+    setError("");
     try {
-      const response = await axios.get(
-        `http://localhost:8000/atm-check/${boardId}`
-      );
-      setAtmData(response.data);
-      setFmecaData([]);
+      const response = await fetchWithAuth(`${URL}/atm-check/${boardId}`);
+
+      if (response) {
+        setAtmData(response.data);
+        setFmecaData([]);
+      }
     } catch (error) {
       console.error("Error fetching ATM data:", error);
       setAtmData(null);
+      setError("Failed to load ATM data. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -84,49 +129,74 @@ function FMECAAnalysis({ boardId, boardName, onBack }) {
     } filter-${filterType}`;
   };
 
+  const handleFilterClick = (filterType) => {
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      window.location.href = "/";
+      return;
+    }
+    setActiveFilter(filterType);
+  };
+
+  const handleBackClick = () => {
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      window.location.href = "/";
+      return;
+    }
+    onBack();
+  };
+
   return (
     <div className="analysis-container">
       <div className="analysis-header">
-        <button className="back-button" onClick={onBack}>
+        <button className="back-button" onClick={handleBackClick}>
           ← Back to Boards
         </button>
         <h2 className="analysis-title">{boardName} - FMECA Analysis</h2>
       </div>
 
+      {error && (
+        <div className="error-message">
+          {error}{" "}
+          <button onClick={() => window.location.reload()}>Retry</button>
+        </div>
+      )}
+
       <div className="filter-buttons">
         <button
           className={getFilterButtonClass("red")}
-          onClick={() => setActiveFilter("red")}
+          onClick={() => handleFilterClick("red")}
         >
           🔴 Value ≥ 70
         </button>
         <button
           className={getFilterButtonClass("orange")}
-          onClick={() => setActiveFilter("orange")}
+          onClick={() => handleFilterClick("orange")}
         >
           🟠 70 &gt; Value ≥ 60
         </button>
         <button
           className={getFilterButtonClass("yellow")}
-          onClick={() => setActiveFilter("yellow")}
+          onClick={() => handleFilterClick("yellow")}
         >
           🟡 60 &gt; Value ≥ 50
         </button>
         <button
           className={getFilterButtonClass("green")}
-          onClick={() => setActiveFilter("green")}
+          onClick={() => handleFilterClick("green")}
         >
           🟢 Value &lt; 50
         </button>
         <button
           className={getFilterButtonClass("atm")}
-          onClick={() => setActiveFilter("atm")}
+          onClick={() => handleFilterClick("atm")}
         >
           🏧 ATM Check
         </button>
         <button
           className="filter-button filter-reset"
-          onClick={() => setActiveFilter("all")}
+          onClick={() => handleFilterClick("all")}
         >
           ⚫ Reset
         </button>
@@ -210,11 +280,14 @@ function FMECAAnalysis({ boardId, boardName, onBack }) {
         </>
       )}
 
-      {!loading && fmecaData.length === 0 && activeFilter !== "atm" && (
-        <div className="status-message info">
-          No data found for the selected filter.
-        </div>
-      )}
+      {!loading &&
+        fmecaData.length === 0 &&
+        activeFilter !== "atm" &&
+        !error && (
+          <div className="status-message info">
+            No data found for the selected filter.
+          </div>
+        )}
     </div>
   );
 }
