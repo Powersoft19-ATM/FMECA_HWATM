@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: fmeca-backend
-    env: python
-    pythonVersion: 3.11.9
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
