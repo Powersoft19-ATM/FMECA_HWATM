@@ -4,8 +4,8 @@ console.log(process.env.NODE_ENV);
 if (process.env.NODE_ENV === "development") {
   URL = "http://localhost:8000";
 } else if (process.env.NODE_ENV === "production") {
-  URL = window.location.href;
+  URL = "https://fmeca-hwatm.onrender.com";
 } else {
-  URL = window.location.href;
+  URL = "https://fmeca-hwatm.onrender.com";
 }
 export { URL, baseURL };
