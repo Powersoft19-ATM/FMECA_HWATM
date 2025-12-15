@@ -1,3 +1,5 @@
+from fastapi import FastAPI, Depends, HTTPException, status, Form
+from datetime import timedelta
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -556,9 +558,13 @@ def get_admin_user(current_user: UserInDB = Depends(get_current_active_user)) ->
 # ==================== AUTHENTICATION ENDPOINTS ====================
 
 @app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+@app.post("/token", response_model=Token)
+async def login_for_access_token(
+    username: str = Form(...),      # Changed from OAuth2PasswordRequestForm
+    password: str = Form(...)       # Changed from OAuth2PasswordRequestForm
+):
     """Login endpoint - returns JWT token"""
-    user = authenticate_user(form_data.username, form_data.password)
+    user = authenticate_user(username,password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
