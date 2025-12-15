@@ -43,7 +43,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=[FRONTEND_URL, "https://fmeca-hwatm-1.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
