@@ -9,4 +9,4 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 pymongo==4.9
 python-dotenv==1.0.0
-numpy==1.26.4
+numpy==2.1.0
