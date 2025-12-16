@@ -28,7 +28,7 @@ function MainDashboard({ boards, onBoardSelect }) {
 
   return (
     <div className="dashboard-container">
-      <h1 className="dashboard-title">FMECA-Hardware Integrations</h1>
+      <h1 className="dashboard-title">FMECA-HWATM Integrations</h1>
       <h3 className="dashboard-subtitle">
         Select a Board to View FMECA Analysis
       </h3>
