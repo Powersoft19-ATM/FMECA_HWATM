@@ -1,7 +1,7 @@
 /* App container styles */
 .app-container {
   min-height: 100vh;
-  background: #d1d1d1;
+  background: #ebebeb;
   padding: 20px;
 }
 
@@ -57,7 +57,6 @@
 
 .board-item {
   position: relative;
-  border: 3px solid black;
   border-radius: 15px;
   padding: 20px;
   text-align: center;
@@ -607,6 +606,7 @@
   font-size: 24px;
   font-weight: 600;
   text-decoration: none;
+  font-family: sans-serif;
 }
 
 .navbar-user {
