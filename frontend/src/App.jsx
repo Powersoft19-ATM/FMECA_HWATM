@@ -217,7 +217,7 @@ function App() {
   return (
     <div className="app-container">
       <nav className="navbar">
-        <div className="navbar-brand">FMECA Hardware Integrations</div>
+        <div className="navbar-brand">FMECA-HWATM Integrations</div>
         <div className="navbar-user">
           <span>Welcome, {userDetails?.full_name || user}</span>
           {userDetails?.role === "admin" && (

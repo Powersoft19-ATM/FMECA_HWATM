@@ -59,7 +59,7 @@ function Login({ onLogin }) {
   return (
     <div className="login-container">
       <div className="login-box">
-        <h1 className="login-title">FMECA Hardware Integrations</h1>
+        <h1 className="login-title">FMECA-HWATM Integrations</h1>
         <p className="login-subtitle">
           {isRegistering
             ? "Create a new account"

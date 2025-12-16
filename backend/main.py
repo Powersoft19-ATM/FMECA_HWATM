@@ -35,7 +35,7 @@ from auth import (
     get_users_by_role, search_users, ROLES, db
 )
 
-app = FastAPI(title="FMECA Hardware Integrations API", version="2.0.0")
+app = FastAPI(title="FMECA-HWATM Integrations API", version="2.0.0")
 
 # OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
