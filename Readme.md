@@ -1,4 +1,4 @@
-# FMECA Hardware Integrations
+# FMECA-HWATM Integrations
 
 FastAPI Backend + React Frontend
 

@@ -1178,7 +1178,7 @@ async def delete_board_file(
 async def root():
     """API root endpoint"""
     return {
-        "message": "FMECA Hardware Integrations API",
+        "message": "FMECA-HWATM Integrations API",
         "version": "2.0.0",
         "features": ["User Management", "File Upload", "FMECA Analysis", "Database Storage"]
     }
