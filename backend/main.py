@@ -64,8 +64,6 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
 # MongoDB collections
 excel_files_collection = db.excel_files
-# Add a new collection for dynamic boards
-boards_collection = db.boards
 
 # Enum for file types
 class FileType(str, Enum):
@@ -88,28 +86,6 @@ class BoardCreate(BaseModel):
     description: Optional[str] = None
     image_path: str  # CDN URL for the board image
     category: Optional[str] = "main"
-
-class BoardUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    image_path: Optional[str] = None
-    category: Optional[str] = None
-
-class DynamicBoardInfo(BaseModel):
-    id: str
-    name: str
-    description: Optional[str] = None
-    image_path: str
-    category: str
-    created_by: Optional[str]
-    created_at: datetime
-    updated_at: datetime
-    has_fmeca: bool
-    has_coverage: bool
-    has_fmeca_db: bool
-    has_coverage_db: bool
-    has_image: bool
-    last_updated: Optional[datetime]
 
 class FilterRequest(BaseModel):
     board_id: int
@@ -175,7 +151,7 @@ class ExcelDataResponse(BaseModel):
     record_count: int
     data: Dict[str, Any]
 
-# ================ PASTE YOUR UPLOADCARE URLs HERE ================
+# ================ INITIAL BOARD CONFIGURATION ================
 BOARD_CONFIG = {
     1: {
         "name": "IMD", 
@@ -232,7 +208,10 @@ BOARD_CONFIG = {
         "image_url": "https://2i5aozhtbd.ucarecd.net/c3794c37-c4bb-42c6-8301-4f5d188cbf40/CC.png"
     }
 }
-# ================ END: PASTE YOUR UPLOADCARE URLs ================
+# ================ END: INITIAL BOARD CONFIGURATION ================
+
+# In-memory storage for dynamically added boards
+DYNAMIC_BOARDS = {}
 
 # Startup event
 @app.on_event("startup")
@@ -240,11 +219,11 @@ async def startup_db_client():
     create_indexes()
     init_default_users()
     create_excel_indexes()
-    create_boards_indexes()
     print("✅ MongoDB initialized with default users")
     print("✅ Upload directories created")
     print("✅ Excel files indexes created")
-    print("✅ Boards collection indexes created")
+    print(f"✅ Loaded {len(BOARD_CONFIG)} static boards")
+    print(f"✅ Dynamic boards storage initialized")
 
 # Create indexes for excel files collection
 def create_excel_indexes():
@@ -253,12 +232,26 @@ def create_excel_indexes():
     excel_files_collection.create_index([("board_id", 1), ("file_type", 1), ("version", -1)])
     print("✅ Excel files indexes created")
 
-# Create indexes for boards collection
-def create_boards_indexes():
-    boards_collection.create_index([("name", 1)], unique=True)
-    boards_collection.create_index([("category", 1)])
-    boards_collection.create_index([("created_at", -1)])
-    print("✅ Boards collection indexes created")
+def get_all_boards() -> Dict[int, dict]:
+    """Get combined boards (static + dynamic)"""
+    all_boards = BOARD_CONFIG.copy()
+    all_boards.update(DYNAMIC_BOARDS)
+    return all_boards
+
+def get_next_board_id() -> int:
+    """Get the next available board ID"""
+    all_boards = get_all_boards()
+    if not all_boards:
+        return 1
+    return max(all_boards.keys()) + 1
+
+def find_board_by_name(board_name: str) -> Optional[int]:
+    """Find board ID by name (case-insensitive)"""
+    all_boards = get_all_boards()
+    for board_id, config in all_boards.items():
+        if config.get("name", "").lower() == board_name.lower():
+            return board_id
+    return None
 
 # Helper functions
 def allowed_file(filename: str, file_type: str = 'excel') -> bool:
@@ -293,7 +286,7 @@ def create_colored_placeholder(board_name: str, board_id: int) -> Optional[str]:
             (0, 128, 128), (128, 0, 128), (210, 105, 30)
         ]
         
-        color = colors[board_id - 1] if board_id <= len(colors) else colors[0]
+        color = colors[(board_id - 1) % len(colors)] if board_id > 0 else colors[0]
         
         img = Image.new('RGB', (250, 200), color=color)
         draw = ImageDraw.Draw(img)
@@ -311,37 +304,40 @@ def create_colored_placeholder(board_name: str, board_id: int) -> Optional[str]:
         return None
 
 def load_board_image(board_id: int) -> Optional[str]:
-    """Load board image from Uploadcare CDN or local fallback"""
-    board_config = BOARD_CONFIG.get(board_id)
+    """Load board image from CDN or local fallback"""
+    all_boards = get_all_boards()
+    board_config = all_boards.get(board_id)
+    
     if not board_config:
         return None
     
     board_name = board_config["name"]
     
-    # 1. FIRST PRIORITY: Use Uploadcare URL if available
+    # 1. FIRST PRIORITY: Use CDN URL if available
     if "image_url" in board_config and board_config["image_url"]:
-        uploadcare_url = board_config["image_url"]
-        print(f"✅ Using Uploadcare image for {board_name}: {uploadcare_url}")
-        return uploadcare_url
+        cdn_url = board_config["image_url"]
+        print(f"✅ Using CDN image for {board_name}: {cdn_url}")
+        return cdn_url
     
-    # 2. FALLBACK: Check for locally uploaded images
-    board_dir = BOARDS_DIR / board_name
-    board_dir.mkdir(exist_ok=True)
-    
-    image_extensions = ALLOWED_EXTENSIONS['image']
-    for ext in image_extensions:
-        image_path = board_dir / f"{board_name}{ext}"
-        if image_path.exists():
-            try:
-                print(f"⚠️ Using local image for {board_name}")
-                with open(image_path, "rb") as image_file:
-                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                    ext = image_path.suffix.lower()
-                    mime_type = f"image/{ext[1:]}" if ext != '.jpg' else "image/jpeg"
-                    return f"data:{mime_type};base64,{encoded_string}"
-            except Exception as e:
-                print(f"❌ Error loading local image {image_path}: {e}")
-                continue
+    # 2. FALLBACK: Check for locally uploaded images (only for static boards)
+    if board_id in BOARD_CONFIG:  # Only static boards have local files
+        board_dir = BOARDS_DIR / board_name
+        board_dir.mkdir(exist_ok=True)
+        
+        image_extensions = ALLOWED_EXTENSIONS['image']
+        for ext in image_extensions:
+            image_path = board_dir / f"{board_name}{ext}"
+            if image_path.exists():
+                try:
+                    print(f"⚠️ Using local image for {board_name}")
+                    with open(image_path, "rb") as image_file:
+                        encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+                        ext = image_path.suffix.lower()
+                        mime_type = f"image/{ext[1:]}" if ext != '.jpg' else "image/jpeg"
+                        return f"data:{mime_type};base64,{encoded_string}"
+                except Exception as e:
+                    print(f"❌ Error loading local image {image_path}: {e}")
+                    continue
     
     # 3. FINAL FALLBACK: Create colored placeholder
     print(f"⚠️ No image found for {board_name}, using placeholder")
@@ -349,21 +345,28 @@ def load_board_image(board_id: int) -> Optional[str]:
 
 def check_board_files(board_id: int) -> dict:
     """Check what files exist for a board"""
-    board_config = BOARD_CONFIG.get(board_id)
+    all_boards = get_all_boards()
+    board_config = all_boards.get(board_id)
+    
     if not board_config:
         return {"fmeca_exists": False, "coverage_exists": False, "image_exists": False,
                 "fmeca_db_exists": False, "coverage_db_exists": False}
     
     board_name = board_config["name"]
     
-    fmeca_exists = Path(board_config["fmeca_file"]).exists()
-    coverage_exists = Path(board_config["coverage_file"]).exists()
+    # For static boards, check file system
+    fmeca_exists = False
+    coverage_exists = False
+    
+    if board_id in BOARD_CONFIG:  # Static board
+        fmeca_exists = Path(board_config.get("fmeca_file", "")).exists()
+        coverage_exists = Path(board_config.get("coverage_file", "")).exists()
     
     # Check for image
     image_exists = False
     if "image_url" in board_config and board_config["image_url"]:
         image_exists = True
-    else:
+    elif board_id in BOARD_CONFIG:  # Static board with local image
         for ext in ALLOWED_EXTENSIONS['image']:
             if (BOARDS_DIR / board_name / f"{board_name}{ext}").exists() or \
                (BOARDS_DIR / f"{board_name}{ext}").exists():
@@ -372,12 +375,12 @@ def check_board_files(board_id: int) -> dict:
     
     # Check if data exists in database
     fmeca_db_exists = excel_files_collection.count_documents({
-        "board_id": board_id, 
+        "board_id": str(board_id),  # Store as string
         "file_type": "fmeca"
     }) > 0
     
     coverage_db_exists = excel_files_collection.count_documents({
-        "board_id": board_id, 
+        "board_id": str(board_id),  # Store as string
         "file_type": "coverage"
     }) > 0
     
@@ -397,36 +400,43 @@ def load_main_data(board_id: int) -> pd.DataFrame:
         if not df_from_db.empty:
             return df_from_db
         
-        # Fallback to file system
-        board_config = BOARD_CONFIG.get(board_id)
-        if not board_config:
-            raise HTTPException(status_code=404, detail="Board not found")
+        # Fallback to file system (only for static boards)
+        if board_id in BOARD_CONFIG:
+            board_config = BOARD_CONFIG.get(board_id)
+            if not board_config:
+                raise HTTPException(status_code=404, detail="Board not found")
+            
+            fmeca_file = board_config.get("fmeca_file", "")
+            if not fmeca_file:
+                return pd.DataFrame()
+                
+            print(f"📂 Loading FMECA file from disk: {fmeca_file}")
+            
+            if not os.path.exists(fmeca_file):
+                print(f"❌ FMECA file not found: {fmeca_file}")
+                return pd.DataFrame()
+            
+            sheet_names = ['DFMECA', 'Sheet1', 'FMECA', 'Data']
+            df = None
+            
+            for sheet in sheet_names:
+                try:
+                    df = pd.read_excel(fmeca_file, sheet_name=sheet)
+                    print(f" Loaded from sheet: {sheet}")
+                    break
+                except:
+                    continue
+            
+            if df is None:
+                df = pd.read_excel(fmeca_file)
+                print(" Loaded from first available sheet")
+            
+            df = df.ffill()
+            print(f" FMECA data loaded from file: {len(df)} rows")
+            return df
+            
+        return pd.DataFrame()
         
-        fmeca_file = board_config["fmeca_file"]
-        print(f"📂 Loading FMECA file from disk: {fmeca_file}")
-        
-        if not os.path.exists(fmeca_file):
-            print(f"❌ FMECA file not found: {fmeca_file}")
-            return pd.DataFrame()
-        
-        sheet_names = ['DFMECA', 'Sheet1', 'FMECA', 'Data']
-        df = None
-        
-        for sheet in sheet_names:
-            try:
-                df = pd.read_excel(fmeca_file, sheet_name=sheet)
-                print(f" Loaded from sheet: {sheet}")
-                break
-            except:
-                continue
-        
-        if df is None:
-            df = pd.read_excel(fmeca_file)
-            print(" Loaded from first available sheet")
-        
-        df = df.ffill()
-        print(f" FMECA data loaded from file: {len(df)} rows")
-        return df
     except Exception as e:
         print(f" Error loading FMECA data: {e}")
         return pd.DataFrame()
@@ -436,7 +446,7 @@ def load_main_data_from_db(board_id: int) -> pd.DataFrame:
     try:
         # Get latest FMECA data from DB
         record = excel_files_collection.find_one(
-            {"board_id": board_id, "file_type": "fmeca"},
+            {"board_id": str(board_id), "file_type": "fmeca"},  # Search as string
             sort=[("upload_date", -1)]
         )
         
@@ -467,35 +477,42 @@ def load_reference_data(board_id: int) -> pd.DataFrame:
         if not df_from_db.empty:
             return df_from_db
         
-        # Fallback to file system
-        board_config = BOARD_CONFIG.get(board_id)
-        if not board_config:
-            raise HTTPException(status_code=404, detail="Board not found")
+        # Fallback to file system (only for static boards)
+        if board_id in BOARD_CONFIG:
+            board_config = BOARD_CONFIG.get(board_id)
+            if not board_config:
+                raise HTTPException(status_code=404, detail="Board not found")
+            
+            coverage_file = board_config.get("coverage_file", "")
+            if not coverage_file:
+                return pd.DataFrame()
+                
+            print(f"📂 Loading coverage file from disk: {coverage_file}")
+            
+            if not os.path.exists(coverage_file):
+                print(f"❌ Coverage file not found: {coverage_file}")
+                return pd.DataFrame()
+            
+            sheet_names = ['iiGD board', 'Sheet1', 'Coverage', 'Data', 'ATM']
+            ref_df = None
+            
+            for sheet in sheet_names:
+                try:
+                    ref_df = pd.read_excel(coverage_file, sheet_name=sheet)
+                    print(f"✅ Loaded from sheet: {sheet}")
+                    break
+                except:
+                    continue
+            
+            if ref_df is None:
+                ref_df = pd.read_excel(coverage_file)
+                print("✅ Loaded from first available sheet")
+            
+            print(f"✅ Coverage data loaded from file: {len(ref_df)} rows")
+            return ref_df
+            
+        return pd.DataFrame()
         
-        coverage_file = board_config["coverage_file"]
-        print(f"📂 Loading coverage file from disk: {coverage_file}")
-        
-        if not os.path.exists(coverage_file):
-            print(f"❌ Coverage file not found: {coverage_file}")
-            return pd.DataFrame()
-        
-        sheet_names = ['iiGD board', 'Sheet1', 'Coverage', 'Data', 'ATM']
-        ref_df = None
-        
-        for sheet in sheet_names:
-            try:
-                ref_df = pd.read_excel(coverage_file, sheet_name=sheet)
-                print(f"✅ Loaded from sheet: {sheet}")
-                break
-            except:
-                continue
-        
-        if ref_df is None:
-            ref_df = pd.read_excel(coverage_file)
-            print("✅ Loaded from first available sheet")
-        
-        print(f"✅ Coverage data loaded from file: {len(ref_df)} rows")
-        return ref_df
     except Exception as e:
         print(f"❌ Error loading coverage data: {e}")
         return pd.DataFrame()
@@ -505,7 +522,7 @@ def load_reference_data_from_db(board_id: int) -> pd.DataFrame:
     try:
         # Get latest coverage data from DB
         record = excel_files_collection.find_one(
-            {"board_id": board_id, "file_type": "coverage"},
+            {"board_id": str(board_id), "file_type": "coverage"},  # Search as string
             sort=[("upload_date", -1)]
         )
         
@@ -597,10 +614,9 @@ def get_admin_user(current_user: UserInDB = Depends(get_current_active_user)) ->
 # ==================== AUTHENTICATION ENDPOINTS ====================
 
 @app.post("/token", response_model=Token)
-@app.post("/token", response_model=Token)
 async def login_for_access_token(
-    username: str = Form(...),      # Changed from OAuth2PasswordRequestForm
-    password: str = Form(...)       # Changed from OAuth2PasswordRequestForm
+    username: str = Form(...),
+    password: str = Form(...)
 ):
     """Login endpoint - returns JWT token"""
     user = authenticate_user(username,password)
@@ -661,107 +677,47 @@ async def change_password(
 
 # ==================== DYNAMIC BOARD MANAGEMENT ENDPOINTS ====================
 
-@app.get("/all-boards", response_model=List[DynamicBoardInfo])
-async def get_all_boards(
+@app.get("/all-boards", response_model=List[BoardInfo])
+async def get_all_boards_list(
     current_user: UserInDB = Depends(get_current_active_user)
 ):
     """
-    Get all boards (both static and dynamic) 
-    Combines BOARD_CONFIG static boards with dynamic boards from database
+    Get all boards (both static and dynamic)
     """
     try:
-        # Get dynamic boards from database
-        dynamic_boards_cursor = boards_collection.find({})
-        dynamic_boards = await dynamic_boards_cursor.to_list(length=None)
+        print("🎯 /all-boards API called")
         
-        # Convert dynamic boards to response format
-        dynamic_board_list = []
-        for board in dynamic_boards:
-            # Get file status for dynamic board
-            board_id_str = board["_id"]
-            
-            # Check if data exists in database for this board
-            fmeca_db_exists = excel_files_collection.count_documents({
-                "board_id": board_id_str, 
-                "file_type": "fmeca"
-            }) > 0
-            
-            coverage_db_exists = excel_files_collection.count_documents({
-                "board_id": board_id_str, 
-                "file_type": "coverage"
-            }) > 0
-            
-            dynamic_board_list.append({
-                "id": board["_id"],
-                "name": board.get("name", ""),
-                "description": board.get("description"),
-                "image_path": board.get("image_path", ""),
-                "category": board.get("category", "main"),
-                "created_by": board.get("created_by"),
-                "created_at": board.get("created_at", datetime.utcnow()),
-                "updated_at": board.get("updated_at", datetime.utcnow()),
-                "has_fmeca": False,  # File system - not applicable for dynamic boards
-                "has_coverage": False,  # File system - not applicable for dynamic boards
-                "has_fmeca_db": fmeca_db_exists,
-                "has_coverage_db": coverage_db_exists,
-                "has_image": board.get("has_image", True),
-                "last_updated": board.get("last_updated")
-            })
+        all_boards_config = get_all_boards()
+        boards_list = []
         
-        # Get static boards from BOARD_CONFIG
-        static_board_list = []
-        for board_id, board_config in BOARD_CONFIG.items():
+        for board_id, board_config in all_boards_config.items():
+            print(f"🔍 Processing board: {board_config.get('name')} (ID: {board_id})")
+            
             file_info = check_board_files(board_id)
-            
-            # Get latest records for both file types from DB
-            fmeca_record = excel_files_collection.find_one(
-                {"board_id": board_id, "file_type": "fmeca"},
-                sort=[("upload_date", -1)]
-            )
-            
-            coverage_record = excel_files_collection.find_one(
-                {"board_id": board_id, "file_type": "coverage"},
-                sort=[("upload_date", -1)]
-            )
-            
-            fmeca_db_exists = fmeca_record is not None
-            coverage_db_exists = coverage_record is not None
-            
-            # Get image from config or generate placeholder
             image_data = load_board_image(board_id)
-            if not image_data and "image_url" in board_config:
-                image_data = board_config["image_url"]
             
-            static_board_list.append({
-                "id": str(board_id),
-                "name": board_config["name"],
-                "description": f"Static board {board_config['name']}",
-                "image_path": image_data if image_data and image_data.startswith("http") else "",
-                "category": "static",
-                "created_by": "system",
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
-                "has_fmeca": file_info["fmeca_exists"],
-                "has_coverage": file_info["coverage_exists"],
-                "has_fmeca_db": fmeca_db_exists,
-                "has_coverage_db": coverage_db_exists,
-                "has_image": file_info["image_exists"],
-                "last_updated": None
-            })
-        
-        # Combine both lists
-        all_boards = static_board_list + dynamic_board_list
+            boards_list.append(BoardInfo(
+                id=board_id, 
+                name=board_config.get("name", f"Board {board_id}"), 
+                image=image_data,
+                has_fmeca=file_info["fmeca_exists"],
+                has_coverage=file_info["coverage_exists"],
+                has_image=file_info["image_exists"],
+                has_fmeca_db=file_info["fmeca_db_exists"],
+                has_coverage_db=file_info["coverage_db_exists"]
+            ))
         
         # Sort by name
-        all_boards.sort(key=lambda x: x["name"].lower())
+        boards_list.sort(key=lambda x: x.name.lower())
         
-        return all_boards
+        print(f"✅ All boards processed successfully: {len(boards_list)} boards")
+        return boards_list
         
     except Exception as e:
         print(f"❌ Error getting all boards: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get boards: {str(e)}")
 
-@app.post("/boards", response_model=DynamicBoardInfo)
+@app.post("/boards", response_model=dict)
 async def create_new_board(
     board: BoardCreate,
     current_user: UserInDB = Depends(get_admin_user)
@@ -775,275 +731,52 @@ async def create_new_board(
             detail="Image path must be a valid URL starting with http:// or https://"
         )
     
-    # Check if board with same name already exists (in both static and dynamic)
-    # Check static boards
-    for board_config in BOARD_CONFIG.values():
-        if board_config["name"].lower() == board.name.lower():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Board with name '{board.name}' already exists in static boards"
-            )
-    
-    # Check dynamic boards in database
-    existing_dynamic_board = await boards_collection.find_one({"name": board.name})
-    if existing_dynamic_board:
+    # Check if board with same name already exists
+    existing_board_id = find_board_by_name(board.name)
+    if existing_board_id is not None:
         raise HTTPException(
             status_code=400,
-            detail=f"Board with name '{board.name}' already exists"
+            detail=f"Board with name '{board.name}' already exists (ID: {existing_board_id})"
         )
     
     try:
-        # Generate unique ID
-        board_id = str(uuid.uuid4())
+        # Get next available board ID
+        board_id = get_next_board_id()
         
-        # Create board document
-        board_doc = {
-            "_id": board_id,
+        # Create board configuration
+        board_config = {
             "name": board.name,
+            "image_url": board.image_path,
             "description": board.description,
-            "image_path": board.image_path,
             "category": board.category,
             "created_by": current_user.username,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
-            "has_fmeca": False,
-            "has_coverage": False,
-            "has_fmeca_db": False,
-            "has_coverage_db": False,
-            "has_image": True,  # Since we're adding with image
-            "last_updated": datetime.utcnow()
+            "created_at": datetime.utcnow().isoformat(),
+            "is_dynamic": True  # Mark as dynamically added
         }
         
-        # Insert into MongoDB
-        result = await boards_collection.insert_one(board_doc)
+        # Add to dynamic boards storage
+        DYNAMIC_BOARDS[board_id] = board_config
         
-        if result.inserted_id:
-            # Return the created board
-            return {
-                "id": board_doc["_id"],
-                "name": board_doc["name"],
-                "description": board_doc["description"],
-                "image_path": board_doc["image_path"],
-                "category": board_doc["category"],
-                "created_by": board_doc["created_by"],
-                "created_at": board_doc["created_at"],
-                "updated_at": board_doc["updated_at"],
-                "has_fmeca": board_doc["has_fmeca"],
-                "has_coverage": board_doc["has_coverage"],
-                "has_fmeca_db": board_doc["has_fmeca_db"],
-                "has_coverage_db": board_doc["has_coverage_db"],
-                "has_image": board_doc["has_image"],
-                "last_updated": board_doc["last_updated"]
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to create board")
+        print(f"✅ New board created: {board.name} (ID: {board_id})")
+        print(f"   Image URL: {board.image_path}")
+        print(f"   Created by: {current_user.username}")
+        
+        return {
+            "id": board_id,
+            "name": board.name,
+            "message": f"Board '{board.name}' created successfully",
+            "image_url": board.image_path,
+            "created_at": board_config["created_at"]
+        }
             
     except Exception as e:
         print(f"❌ Error creating board: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating board: {str(e)}")
 
-@app.get("/board/{board_id}", response_model=DynamicBoardInfo)
-async def get_board_by_id(
-    board_id: str,
-    current_user: UserInDB = Depends(get_current_active_user)
-):
-    """Get a specific board by ID (works for both static and dynamic boards)"""
-    
-    try:
-        # First check if it's a static board (numeric ID)
-        if board_id.isdigit():
-            board_id_int = int(board_id)
-            board_config = BOARD_CONFIG.get(board_id_int)
-            
-            if board_config:
-                file_info = check_board_files(board_id_int)
-                
-                # Get DB status
-                fmeca_record = excel_files_collection.find_one(
-                    {"board_id": board_id_int, "file_type": "fmeca"},
-                    sort=[("upload_date", -1)]
-                )
-                
-                coverage_record = excel_files_collection.find_one(
-                    {"board_id": board_id_int, "file_type": "coverage"},
-                    sort=[("upload_date", -1)]
-                )
-                
-                image_data = load_board_image(board_id_int)
-                
-                return {
-                    "id": str(board_id_int),
-                    "name": board_config["name"],
-                    "description": f"Static board {board_config['name']}",
-                    "image_path": image_data if image_data and image_data.startswith("http") else "",
-                    "category": "static",
-                    "created_by": "system",
-                    "created_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow(),
-                    "has_fmeca": file_info["fmeca_exists"],
-                    "has_coverage": file_info["coverage_exists"],
-                    "has_fmeca_db": fmeca_record is not None,
-                    "has_coverage_db": coverage_record is not None,
-                    "has_image": file_info["image_exists"],
-                    "last_updated": None
-                }
-        
-        # If not static board, check dynamic boards
-        board = await boards_collection.find_one({"_id": board_id})
-        if not board:
-            raise HTTPException(status_code=404, detail="Board not found")
-        
-        # Get DB status for dynamic board
-        fmeca_db_exists = excel_files_collection.count_documents({
-            "board_id": board_id, 
-            "file_type": "fmeca"
-        }) > 0
-        
-        coverage_db_exists = excel_files_collection.count_documents({
-            "board_id": board_id, 
-            "file_type": "coverage"
-        }) > 0
-        
-        return {
-            "id": board["_id"],
-            "name": board.get("name", ""),
-            "description": board.get("description"),
-            "image_path": board.get("image_path", ""),
-            "category": board.get("category", "main"),
-            "created_by": board.get("created_by"),
-            "created_at": board.get("created_at", datetime.utcnow()),
-            "updated_at": board.get("updated_at", datetime.utcnow()),
-            "has_fmeca": False,
-            "has_coverage": False,
-            "has_fmeca_db": fmeca_db_exists,
-            "has_coverage_db": coverage_db_exists,
-            "has_image": board.get("has_image", True),
-            "last_updated": board.get("last_updated")
-        }
-        
-    except Exception as e:
-        print(f"❌ Error getting board: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get board: {str(e)}")
-
-@app.put("/board/{board_id}", response_model=DynamicBoardInfo)
-async def update_board(
-    board_id: str,
-    board_update: BoardUpdate,
-    current_user: UserInDB = Depends(get_admin_user)
-):
-    """Update board information (for dynamic boards only)"""
-    
-    # Find the board (only dynamic boards can be updated)
-    board = await boards_collection.find_one({"_id": board_id})
-    if not board:
-        raise HTTPException(status_code=404, detail="Board not found or cannot be updated")
-    
-    # Prepare update data
-    update_data = {"updated_at": datetime.utcnow(), "last_updated": datetime.utcnow()}
-    
-    if board_update.name is not None:
-        # Check if new name conflicts with existing boards
-        if board_update.name != board.get("name"):
-            # Check static boards
-            for board_config in BOARD_CONFIG.values():
-                if board_config["name"].lower() == board_update.name.lower():
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Board with name '{board_update.name}' already exists in static boards"
-                    )
-            
-            # Check other dynamic boards
-            existing_board = await boards_collection.find_one({
-                "name": board_update.name,
-                "_id": {"$ne": board_id}
-            })
-            if existing_board:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Board with name '{board_update.name}' already exists"
-                )
-        
-        update_data["name"] = board_update.name
-    
-    if board_update.description is not None:
-        update_data["description"] = board_update.description
-    
-    if board_update.image_path is not None:
-        # Validate image URL
-        if not board_update.image_path.startswith(('http://', 'https://')):
-            raise HTTPException(
-                status_code=400, 
-                detail="Image path must be a valid URL starting with http:// or https://"
-            )
-        update_data["image_path"] = board_update.image_path
-        update_data["has_image"] = True
-    
-    if board_update.category is not None:
-        update_data["category"] = board_update.category
-    
-    # Update the board
-    await boards_collection.update_one(
-        {"_id": board_id},
-        {"$set": update_data}
-    )
-    
-    # Get updated board
-    updated_board = await boards_collection.find_one({"_id": board_id})
-    
-    # Get DB status
-    fmeca_db_exists = excel_files_collection.count_documents({
-        "board_id": board_id, 
-        "file_type": "fmeca"
-    }) > 0
-    
-    coverage_db_exists = excel_files_collection.count_documents({
-        "board_id": board_id, 
-        "file_type": "coverage"
-    }) > 0
-    
-    return {
-        "id": updated_board["_id"],
-        "name": updated_board.get("name", ""),
-        "description": updated_board.get("description"),
-        "image_path": updated_board.get("image_path", ""),
-        "category": updated_board.get("category", "main"),
-        "created_by": updated_board.get("created_by"),
-        "created_at": updated_board.get("created_at", datetime.utcnow()),
-        "updated_at": updated_board.get("updated_at", datetime.utcnow()),
-        "has_fmeca": updated_board.get("has_fmeca", False),
-        "has_coverage": updated_board.get("has_coverage", False),
-        "has_fmeca_db": fmeca_db_exists,
-        "has_coverage_db": coverage_db_exists,
-        "has_image": updated_board.get("has_image", True),
-        "last_updated": updated_board.get("last_updated")
-    }
-
-@app.delete("/board/{board_id}")
-async def delete_board(
-    board_id: str,
-    current_user: UserInDB = Depends(get_admin_user)
-):
-    """Delete a dynamic board"""
-    
-    # Check if it's a static board
-    if board_id.isdigit() and int(board_id) in BOARD_CONFIG:
-        raise HTTPException(status_code=400, detail="Cannot delete static boards")
-    
-    # Find the board
-    board = await boards_collection.find_one({"_id": board_id})
-    if not board:
-        raise HTTPException(status_code=404, detail="Board not found")
-    
-    # Delete the board
-    result = await boards_collection.delete_one({"_id": board_id})
-    
-    if result.deleted_count == 1:
-        # Also delete associated data from excel_files collection
-        await excel_files_collection.delete_many({"board_id": board_id})
-        
-        return {"message": f"Board '{board.get('name')}' deleted successfully"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to delete board")
+@app.get("/boards", response_model=List[BoardInfo])
+async def get_boards(current_user: UserInDB = Depends(get_current_active_user)):
+    """Get all boards with file status (alias for /all-boards)"""
+    return await get_all_boards_list(current_user)
 
 # ==================== USER MANAGEMENT ENDPOINTS ====================
 
@@ -1187,7 +920,7 @@ async def get_available_roles(admin: UserInDB = Depends(get_admin_user)):
 
 @app.post("/upload/board/{board_id}/excel-to-db")
 async def upload_excel_to_database(
-    board_id: str,  # Changed to string to support both static (numeric) and dynamic (UUID) boards
+    board_id: int,
     file_type: str = Form(...),  # "fmeca" or "coverage"
     file: UploadFile = File(...),
     current_user: UserInDB = Depends(get_current_active_user)
@@ -1202,28 +935,16 @@ async def upload_excel_to_database(
     if not allowed_file(file.filename, 'excel'):
         raise HTTPException(status_code=400, detail="Only Excel files are allowed (.xlsx, .xls)")
     
+    # Check if board exists
+    all_boards = get_all_boards()
+    board_config = all_boards.get(board_id)
+    if not board_config:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
     if file_type not in ["fmeca", "coverage"]:
         raise HTTPException(status_code=400, detail="file_type must be 'fmeca' or 'coverage'")
     
     try:
-        # Check if board exists (static or dynamic)
-        board_name = None
-        
-        # Check static boards first
-        if board_id.isdigit():
-            board_id_int = int(board_id)
-            board_config = BOARD_CONFIG.get(board_id_int)
-            if board_config:
-                board_name = board_config["name"]
-        else:
-            # Check dynamic boards
-            board = await boards_collection.find_one({"_id": board_id})
-            if board:
-                board_name = board.get("name")
-        
-        if not board_name:
-            raise HTTPException(status_code=404, detail="Board not found")
-        
         # Read Excel file
         contents = await file.read()
         excel_bytes = io.BytesIO(contents)
@@ -1262,7 +983,7 @@ async def upload_excel_to_database(
         
         # Get version number (increment from previous version)
         latest_version = excel_files_collection.find_one(
-            {"board_id": board_id, "file_type": file_type},
+            {"board_id": str(board_id), "file_type": file_type},  # Store as string
             sort=[("version", -1)]
         )
         
@@ -1276,8 +997,8 @@ async def upload_excel_to_database(
         # Prepare document for MongoDB
         excel_record = {
             "_id": file_id,
-            "board_id": board_id,
-            "board_name": board_name,
+            "board_id": str(board_id),  # Store as string
+            "board_name": board_config.get("name", f"Board {board_id}"),
             "file_type": file_type,
             "original_filename": file.filename,
             "stored_filename": f"{file_id}.json",
@@ -1291,17 +1012,6 @@ async def upload_excel_to_database(
         # Save to MongoDB
         result = excel_files_collection.insert_one(excel_record)
         
-        # Update dynamic board status if applicable
-        if not board_id.isdigit():  # It's a dynamic board
-            update_field = "has_fmeca_db" if file_type == "fmeca" else "has_coverage_db"
-            await boards_collection.update_one(
-                {"_id": board_id},
-                {"$set": {
-                    update_field: True,
-                    "last_updated": datetime.utcnow()
-                }}
-            )
-        
         return {
             "message": "Excel file uploaded and stored in database successfully",
             "file_id": file_id,
@@ -1309,7 +1019,7 @@ async def upload_excel_to_database(
             "stored_size": len(contents),
             "version": version,
             "board_id": board_id,
-            "board_name": board_name
+            "board_name": board_config.get("name", f"Board {board_id}")
         }
         
     except Exception as e:
@@ -1318,7 +1028,7 @@ async def upload_excel_to_database(
 
 @app.get("/get/excel-data/{board_id}")
 async def get_excel_data_from_db(
-    board_id: str,  # Changed to string
+    board_id: int,
     file_type: Optional[str] = None,  # Optional: "fmeca" or "coverage"
     version: Optional[int] = None,    # Optional: specific version
     limit: int = 100,                  # Limit records
@@ -1327,7 +1037,7 @@ async def get_excel_data_from_db(
     """
     Get Excel data from MongoDB for a specific board
     """
-    query = {"board_id": board_id}
+    query = {"board_id": str(board_id)}  # Search as string
     if file_type:
         if file_type not in ["fmeca", "coverage"]:
             raise HTTPException(status_code=400, detail="file_type must be 'fmeca' or 'coverage'")
@@ -1352,7 +1062,7 @@ async def get_excel_data_from_db(
         
         response_data.append({
             "id": record["_id"],
-            "board_id": record["board_id"],
+            "board_id": int(record["board_id"]) if record["board_id"].isdigit() else record["board_id"],
             "board_name": record["board_name"],
             "file_type": record["file_type"],
             "original_filename": record["original_filename"],
@@ -1389,43 +1099,32 @@ async def delete_excel_data(
 
 @app.get("/board/{board_id}/db-status")
 async def get_board_db_status(
-    board_id: str,  # Changed to string
+    board_id: int,
     current_user: UserInDB = Depends(get_current_active_user)
 ):
     """
     Get database status for a board
     """
-    board_name = None
-    
-    # Check if it's a static board
-    if board_id.isdigit():
-        board_id_int = int(board_id)
-        board_config = BOARD_CONFIG.get(board_id_int)
-        if board_config:
-            board_name = board_config["name"]
-    else:
-        # Check dynamic boards
-        board = await boards_collection.find_one({"_id": board_id})
-        if board:
-            board_name = board.get("name")
-    
-    if not board_name:
+    # Check if board exists
+    all_boards = get_all_boards()
+    board_config = all_boards.get(board_id)
+    if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
     # Get latest records for both file types
     fmeca_record = excel_files_collection.find_one(
-        {"board_id": board_id, "file_type": "fmeca"},
+        {"board_id": str(board_id), "file_type": "fmeca"},  # Search as string
         sort=[("upload_date", -1)]
     )
     
     coverage_record = excel_files_collection.find_one(
-        {"board_id": board_id, "file_type": "coverage"},
+        {"board_id": str(board_id), "file_type": "coverage"},  # Search as string
         sort=[("upload_date", -1)]
     )
     
     return {
         "board_id": board_id,
-        "board_name": board_name,
+        "board_name": board_config.get("name", f"Board {board_id}"),
         "fmeca_in_db": fmeca_record is not None,
         "coverage_in_db": coverage_record is not None,
         "fmeca_info": {
@@ -1446,23 +1145,22 @@ async def get_board_db_status(
 
 @app.post("/upload/board/{board_id}/fmeca")
 async def upload_fmeca_file(
-    board_id: str,  # Changed to string
+    board_id: int,
     file: UploadFile = File(...),
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Upload FMECA Excel file for a board"""
+    """Upload FMECA Excel file for a board (static boards only)"""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can upload files")
     
     if not allowed_file(file.filename, 'excel'):
         raise HTTPException(status_code=400, detail="Only Excel files are allowed (.xlsx, .xls)")
     
-    # Only works for static boards (board_id is numeric)
-    if not board_id.isdigit():
-        raise HTTPException(status_code=400, detail="This endpoint only works for static boards. Use /upload/board/{board_id}/excel-to-db for dynamic boards")
+    # Only works for static boards
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404, detail="Static board not found. Use /upload/board/{board_id}/excel-to-db for dynamic boards")
     
-    board_id_int = int(board_id)
-    board_config = BOARD_CONFIG.get(board_id_int)
+    board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
@@ -1477,7 +1175,7 @@ async def upload_fmeca_file(
         file_size = get_file_size(file_path)
         
         # Update board config
-        BOARD_CONFIG[board_id_int]["fmeca_file"] = str(file_path)
+        BOARD_CONFIG[board_id]["fmeca_file"] = str(file_path)
         
         return FileUploadResponse(
             message="FMECA file uploaded successfully",
@@ -1490,23 +1188,22 @@ async def upload_fmeca_file(
 
 @app.post("/upload/board/{board_id}/coverage")
 async def upload_coverage_file(
-    board_id: str,  # Changed to string
+    board_id: int,
     file: UploadFile = File(...),
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Upload coverage Excel file for a board"""
+    """Upload coverage Excel file for a board (static boards only)"""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can upload files")
     
     if not allowed_file(file.filename, 'excel'):
         raise HTTPException(status_code=400, detail="Only Excel files are allowed (.xlsx, .xls)")
     
-    # Only works for static boards (board_id is numeric)
-    if not board_id.isdigit():
-        raise HTTPException(status_code=400, detail="This endpoint only works for static boards. Use /upload/board/{board_id}/excel-to-db for dynamic boards")
+    # Only works for static boards
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404, detail="Static board not found. Use /upload/board/{board_id}/excel-to-db for dynamic boards")
     
-    board_id_int = int(board_id)
-    board_config = BOARD_CONFIG.get(board_id_int)
+    board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
@@ -1521,7 +1218,7 @@ async def upload_coverage_file(
         file_size = get_file_size(file_path)
         
         # Update board config
-        BOARD_CONFIG[board_id_int]["coverage_file"] = str(file_path)
+        BOARD_CONFIG[board_id]["coverage_file"] = str(file_path)
         
         return FileUploadResponse(
             message="Coverage file uploaded successfully",
@@ -1534,23 +1231,22 @@ async def upload_coverage_file(
 
 @app.post("/upload/board/{board_id}/image")
 async def upload_board_image(
-    board_id: str,  # Changed to string
+    board_id: int,
     file: UploadFile = File(...),
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Upload image for a board"""
+    """Upload image for a board (static boards only)"""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can upload files")
     
     if not allowed_file(file.filename, 'image'):
         raise HTTPException(status_code=400, detail="Only image files are allowed (.png, .jpg, .jpeg, .gif, .bmp)")
     
-    # Only works for static boards (board_id is numeric)
-    if not board_id.isdigit():
+    # Only works for static boards
+    if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=400, detail="This endpoint only works for static boards. Use the CDN URL when creating dynamic boards")
     
-    board_id_int = int(board_id)
-    board_config = BOARD_CONFIG.get(board_id_int)
+    board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
@@ -1578,23 +1274,22 @@ async def upload_board_image(
 
 @app.get("/board/{board_id}/files", response_model=BoardFileInfo)
 async def get_board_file_info(
-    board_id: str,  # Changed to string
+    board_id: int,
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Get information about files for a board"""
-    # Only works for static boards (board_id is numeric)
-    if not board_id.isdigit():
+    """Get information about files for a board (static boards only)"""
+    # Only works for static boards
+    if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=400, detail="This endpoint only works for static boards")
     
-    board_id_int = int(board_id)
-    board_config = BOARD_CONFIG.get(board_id_int)
+    board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
-    file_info = check_board_files(board_id_int)
+    file_info = check_board_files(board_id)
     
     return BoardFileInfo(
-        board_id=board_id_int,
+        board_id=board_id,
         board_name=board_config["name"],
         fmeca_exists=file_info["fmeca_exists"],
         coverage_exists=file_info["coverage_exists"],
@@ -1608,20 +1303,19 @@ async def get_board_file_info(
 
 @app.delete("/board/{board_id}/files/{file_type}")
 async def delete_board_file(
-    board_id: str,  # Changed to string
+    board_id: int,
     file_type: str,  # fmeca, coverage, or image
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Delete a file for a board (admin only)"""
+    """Delete a file for a board (admin only, static boards only)"""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can delete files")
     
-    # Only works for static boards (board_id is numeric)
-    if not board_id.isdigit():
+    # Only works for static boards
+    if board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=400, detail="This endpoint only works for static boards")
     
-    board_id_int = int(board_id)
-    board_config = BOARD_CONFIG.get(board_id_int)
+    board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
@@ -1653,45 +1347,24 @@ async def delete_board_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
 
-# ==================== BOARD MANAGEMENT ENDPOINTS ====================
+# ==================== BOARD ANALYSIS ENDPOINTS ====================
 
 @app.get("/", response_model=dict)
 async def root():
     """API root endpoint"""
+    all_boards = get_all_boards()
     return {
         "message": "FMECA-HWATM Integrations API",
         "version": "2.0.0",
-        "features": ["User Management", "File Upload", "FMECA Analysis", "Database Storage", "Dynamic Board Management"]
+        "features": ["User Management", "File Upload", "FMECA Analysis", "Database Storage", "Dynamic Board Management"],
+        "total_boards": len(all_boards),
+        "static_boards": len(BOARD_CONFIG),
+        "dynamic_boards": len(DYNAMIC_BOARDS)
     }
-
-@app.get("/boards", response_model=List[BoardInfo])
-async def get_boards(current_user: UserInDB = Depends(get_current_active_user)):
-    """Get all static boards with file status"""
-    print("🎯 /boards API called (static boards only)")
-    boards = []
-    for board_id, board_config in BOARD_CONFIG.items():
-        print(f"🔍 Processing board: {board_config['name']} (ID: {board_id})")
-        
-        file_info = check_board_files(board_id)
-        image_data = load_board_image(board_id)
-        
-        boards.append(BoardInfo(
-            id=board_id, 
-            name=board_config["name"], 
-            image=image_data,
-            has_fmeca=file_info["fmeca_exists"],
-            has_coverage=file_info["coverage_exists"],
-            has_image=file_info["image_exists"],
-            has_fmeca_db=file_info["fmeca_db_exists"],
-            has_coverage_db=file_info["coverage_db_exists"]
-        ))
-    
-    print("✅ All static boards processed successfully")
-    return boards
 
 @app.post("/fmeca-data/{board_id}")
 async def get_fmeca_data(
-    board_id: str,  # Changed to string
+    board_id: int,
     filter_request: FilterRequest,
     current_user: UserInDB = Depends(get_current_active_user)
 ):
@@ -1699,13 +1372,8 @@ async def get_fmeca_data(
     try:
         print(f"📊 FMECA data requested for board {board_id} with filter {filter_request.filter_type}")
         
-        # Convert board_id to int for static boards
-        if not board_id.isdigit():
-            raise HTTPException(status_code=400, detail="This endpoint only works with static board IDs")
-        
-        board_id_int = int(board_id)
-        df = load_main_data(board_id_int)
-        ref_df = load_reference_data(board_id_int)
+        df = load_main_data(board_id)
+        ref_df = load_reference_data(board_id)
         
         if df.empty:
             return {"data": [], "count": 0, "message": "No FMECA data found"}
@@ -1811,20 +1479,15 @@ async def get_fmeca_data(
 
 @app.get("/atm-check/{board_id}", response_model=ATMResponse)
 async def atm_check(
-    board_id: str,  # Changed to string
+    board_id: int,
     current_user: UserInDB = Depends(get_current_active_user)
 ):
     """Perform ATM check for a board"""
     try:
         print(f"🏧 ATM check requested for board {board_id}")
         
-        # Convert board_id to int for static boards
-        if not board_id.isdigit():
-            raise HTTPException(status_code=400, detail="This endpoint only works with static board IDs")
-        
-        board_id_int = int(board_id)
-        df = load_main_data(board_id_int)
-        ref_df = load_reference_data(board_id_int)
+        df = load_main_data(board_id)
+        ref_df = load_reference_data(board_id)
         
         if df.empty or ref_df.empty:
             return ATMResponse(
