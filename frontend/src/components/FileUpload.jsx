@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import "./FileUpload.css";
 import { URL } from "../../config";
-function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
+
+function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
   const [boards, setBoards] = useState([]);
   const [selectedBoard, setSelectedBoard] = useState("");
   const [selectedFileType, setSelectedFileType] = useState("fmeca");
@@ -41,15 +42,15 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
       const response = await axios.get(`${URL}/board/${boardId}/files`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setBoardStatus(response.data);
 
-      // Also get DB status if in DB mode
-      if (uploadMode === "db") {
-        const dbStatus = await onGetDbStatus(boardId);
-        if (dbStatus) {
-          setBoardStatus((prev) => ({ ...prev, ...dbStatus }));
-        }
-      }
+      // Get DB status from parent component
+      const dbStatus = await onGetDbStatus(boardId);
+
+      // Combine file system status (if any) with DB status
+      setBoardStatus({
+        ...response.data,
+        ...dbStatus,
+      });
     } catch (error) {
       console.error("Error fetching board status:", error);
     }
@@ -71,32 +72,8 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
     setUploading(true);
 
     try {
-      if (uploadMode === "db") {
-        // Upload to database
-        await onUploadToDatabase(selectedBoard, selectedFileType, selectedFile);
-      } else {
-        // Upload to file system
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-
-        let endpoint = "";
-        if (selectedFileType === "fmeca") {
-          endpoint = `${URL}/upload/board/${selectedBoard}/fmeca`;
-        } else if (selectedFileType === "coverage") {
-          endpoint = `${URL}/upload/board/${selectedBoard}/coverage`;
-        } else if (selectedFileType === "image") {
-          endpoint = `${URL}/upload/board/${selectedBoard}/image`;
-        }
-
-        const response = await axios.post(endpoint, formData, {
-          headers: {
-            "Content-Type": "multipart/form-data",
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        alert(`✅ Upload successful: ${response.data.message}`);
-      }
+      // Upload to MongoDB database
+      await onUploadToDatabase(selectedBoard, selectedFileType, selectedFile);
 
       // Reset form
       setSelectedFile(null);
@@ -105,6 +82,8 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
       // Refresh status
       fetchBoardStatus(selectedBoard);
       fetchBoards();
+
+      alert("✅ File uploaded to MongoDB successfully!");
     } catch (error) {
       console.error("Upload error:", error);
       alert(
@@ -121,6 +100,8 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
         return "FMECA Excel";
       case "coverage":
         return "Coverage Excel";
+      case "image":
+        return "Board Image";
       default:
         return type;
     }
@@ -137,9 +118,7 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
   return (
     <div className="file-upload-container">
       <div className="upload-form">
-        <h3>
-          Upload Files to {uploadMode === "db" ? "Database" : "File System"}
-        </h3>
+        <h3>Upload Files to MongoDB Database</h3>
 
         <div className="form-group">
           <label>Select Board:</label>
@@ -160,38 +139,22 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
         {selectedBoard && (
           <div className="board-status">
             <h4>
-              Current Status for{" "}
+              Database Status for{" "}
               {boards.find((b) => b.id == selectedBoard)?.name}
             </h4>
             <div className="status-grid">
               <div className="status-item">
-                <span className="status-label">FMECA File:</span>
+                <span className="status-label">FMECA in DB:</span>
                 <span className="status-value">
-                  {getStatusIcon(boardStatus.fmeca_exists)}
+                  {getStatusIcon(boardStatus.fmeca_in_db)}
                 </span>
               </div>
               <div className="status-item">
-                <span className="status-label">Coverage File:</span>
+                <span className="status-label">Coverage in DB:</span>
                 <span className="status-value">
-                  {getStatusIcon(boardStatus.coverage_exists)}
+                  {getStatusIcon(boardStatus.coverage_in_db)}
                 </span>
               </div>
-              {uploadMode === "db" && (
-                <>
-                  <div className="status-item">
-                    <span className="status-label">FMECA in DB:</span>
-                    <span className="status-value">
-                      {getStatusIcon(boardStatus.fmeca_in_db)}
-                    </span>
-                  </div>
-                  <div className="status-item">
-                    <span className="status-label">Coverage in DB:</span>
-                    <span className="status-value">
-                      {getStatusIcon(boardStatus.coverage_in_db)}
-                    </span>
-                  </div>
-                </>
-              )}
             </div>
           </div>
         )}
@@ -199,7 +162,7 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
         <div className="form-group">
           <label>File Type:</label>
           <div className="file-type-buttons">
-            {["fmeca", "coverage", ""].map((type) => (
+            {["fmeca", "coverage", "image"].map((type) => (
               <button
                 key={type}
                 type="button"
@@ -238,44 +201,39 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
           onClick={handleUpload}
           disabled={uploading || !selectedBoard || !selectedFile}
         >
-          {uploading
-            ? "Uploading..."
-            : `Upload to ${uploadMode === "db" ? "Database" : "File System"}`}
+          {uploading ? "Uploading to MongoDB..." : "Upload to MongoDB"}
         </button>
 
         <div className="upload-info">
           <p>
-            <strong>Note:</strong>{" "}
-            {uploadMode === "db"
-              ? "Excel files will be converted to JSON and stored in MongoDB database for faster queries."
-              : "Files will be saved to local file system."}
+            <strong>Note:</strong> Excel files will be converted to JSON and
+            stored in MongoDB database for faster queries and better data
+            management.
           </p>
-          {uploadMode === "db" && (
-            <p className="db-info">
-              💡 Database storage allows versioning, faster queries, and better
-              data management.
-            </p>
-          )}
+          <p className="db-info">
+            💡 MongoDB storage allows versioning, faster queries, and better
+            data management.
+          </p>
         </div>
       </div>
 
       <div className="database-info">
-        <h4>Database Management</h4>
-        <p>
-          Use the database mode to store Excel data as JSON in MongoDB. This
-          enables:
-        </p>
+        <h4>MongoDB Database Benefits</h4>
+        <p>Storing your Excel data in MongoDB provides these advantages:</p>
         <ul>
-          <li> Faster data retrieval</li>
-          <li> Version history tracking</li>
-          <li> Better search capabilities</li>
-          <li> Scalability for large datasets</li>
-          <li> Data validation and consistency</li>
+          <li>⚡ Faster data retrieval and queries</li>
+          <li>📊 Version history tracking</li>
+          <li>🔍 Advanced search capabilities</li>
+          <li>📈 Scalability for large datasets</li>
+          <li>✅ Data validation and consistency</li>
+          <li>🔄 Real-time data updates</li>
+          <li>🔗 Better relationships between data</li>
+          <li>📝 Structured JSON storage</li>
         </ul>
 
-        {selectedBoard && uploadMode === "db" && boardStatus.fmeca_in_db && (
+        {selectedBoard && boardStatus.fmeca_in_db && (
           <div className="db-details">
-            <h5>Database Details:</h5>
+            <h5>MongoDB Details:</h5>
             <div className="db-detail">
               <span>FMECA Version:</span>
               <span>{boardStatus.fmeca_info?.version || "N/A"}</span>
@@ -283,6 +241,10 @@ function FileUpload({ uploadMode, onUploadToDatabase, onGetDbStatus }) {
             <div className="db-detail">
               <span>FMECA Records:</span>
               <span>{boardStatus.fmeca_info?.record_count || "N/A"}</span>
+            </div>
+            <div className="db-detail">
+              <span>Coverage Records:</span>
+              <span>{boardStatus.coverage_info?.record_count || "N/A"}</span>
             </div>
             <div className="db-detail">
               <span>Last Uploaded:</span>

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import UserManagement from "./UserManagement";
 import FileUpload from "./FileUpload";
-import "./AdminDashboard.css"; // CSS file for styling
+import "./AdminDashboard.css";
 import { URL } from "../../config";
 
 function AdminDashboard({ onBack }) {
@@ -12,11 +12,10 @@ function AdminDashboard({ onBack }) {
     adminUsers: 0,
     regularUsers: 0,
     totalBoards: 9,
-    boardsWithFiles: 0,
     boardsWithDbData: 0,
+    latestUpload: null,
   });
   const [loading, setLoading] = useState(true);
-  const [uploadMode, setUploadMode] = useState("file"); // "file" or "db"
   const [refreshKey, setRefreshKey] = useState(0);
 
   const token = localStorage.getItem("access_token");
@@ -41,20 +40,33 @@ function AdminDashboard({ onBack }) {
 
       const adminCount = users.filter((u) => u.role === "admin").length;
       const userCount = users.filter((u) => u.role === "user").length;
-      const boardsWithFiles = boards.filter(
-        (b) => b.has_fmeca && b.has_coverage
-      ).length;
+
+      // Count boards with MongoDB data
       const boardsWithDbData = boards.filter(
-        (b) => b.has_fmeca_db && b.has_coverage_db
+        (b) => b.has_fmeca_db || b.has_coverage_db
       ).length;
+
+      // Find latest upload
+      let latestUpload = null;
+      boards.forEach((board) => {
+        if (
+          board.last_updated &&
+          (!latestUpload ||
+            new Date(board.last_updated) > new Date(latestUpload))
+        ) {
+          latestUpload = board.last_updated;
+        }
+      });
 
       setStats({
         totalUsers: users.length,
         adminUsers: adminCount,
         regularUsers: userCount,
-        totalBoards: 9,
-        boardsWithFiles: boardsWithFiles,
+        totalBoards: boards.length || 9,
         boardsWithDbData: boardsWithDbData,
+        latestUpload: latestUpload,
+        fmecaCount: boards.filter((b) => b.has_fmeca_db).length,
+        coverageCount: boards.filter((b) => b.has_coverage_db).length,
       });
       setLoading(false);
     } catch (error) {
@@ -79,15 +91,23 @@ function AdminDashboard({ onBack }) {
           },
         }
       );
-      alert(
-        `✅ Upload successful! ${response.data.record_count} records saved to database.\nVersion: ${response.data.version}`
-      );
-      setRefreshKey((old) => old + 1); // Refresh stats with key change
+
+      // Show success message with details
+      const message =
+        fileType === "image"
+          ? `✅ Image uploaded successfully!`
+          : `✅ Upload successful! ${
+              response.data.record_count
+            } records saved to MongoDB.\nVersion: ${
+              response.data.version || "1.0"
+            }`;
+
+      alert(message);
+      setRefreshKey((old) => old + 1); // Refresh stats
     } catch (error) {
       console.error("Upload failed:", error);
-      alert(
-        "❌ Upload failed: " + (error.response?.data?.detail || error.message)
-      );
+      const errorMsg = error.response?.data?.detail || error.message;
+      alert(`❌ Upload failed: ${errorMsg}`);
     }
   };
 
@@ -99,12 +119,23 @@ function AdminDashboard({ onBack }) {
       return response.data;
     } catch (error) {
       console.error("Error getting DB status:", error);
-      return null;
+      // Return default status if endpoint doesn't exist
+      return {
+        fmeca_in_db: false,
+        coverage_in_db: false,
+        fmeca_info: null,
+        coverage_info: null,
+      };
     }
   };
 
   const handleRefresh = () => {
     setRefreshKey((old) => old + 1);
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return "N/A";
+    return new Date(dateString).toLocaleString();
   };
 
   if (loading) {
@@ -126,7 +157,7 @@ function AdminDashboard({ onBack }) {
           </button>
           <div className="header-titles">
             <h2 className="admin-title">Admin Dashboard</h2>
-            <p className="admin-subtitle">System Management & Monitoring</p>
+            <p className="admin-subtitle">MongoDB System Management</p>
           </div>
         </div>
         <button className="refresh-button" onClick={handleRefresh}>
@@ -137,7 +168,7 @@ function AdminDashboard({ onBack }) {
 
       <div className="dashboard-grid">
         <div className="stats-section">
-          <h3 className="section-title">Overview</h3>
+          <h3 className="section-title">MongoDB Overview</h3>
           <div className="stats-grid">
             <div className="stat-card stat-card-primary">
               <div className="stat-icon">👥</div>
@@ -151,30 +182,19 @@ function AdminDashboard({ onBack }) {
             </div>
 
             <div className="stat-card stat-card-success">
-              <div className="stat-icon">🛡️</div>
+              <div className="stat-icon">📊</div>
               <div className="stat-content">
-                <div className="stat-value">{stats.adminUsers}</div>
-                <div className="stat-label">Admin Users</div>
-                <div className="stat-subtext">System administrators</div>
+                <div className="stat-value">{stats.totalBoards}</div>
+                <div className="stat-label">Total Boards</div>
+                <div className="stat-subtext">Available in system</div>
               </div>
             </div>
 
             <div className="stat-card stat-card-info">
-              <div className="stat-icon">👤</div>
+              <div className="stat-icon">💾</div>
               <div className="stat-content">
-                <div className="stat-value">{stats.regularUsers}</div>
-                <div className="stat-label">Regular Users</div>
-                <div className="stat-subtext">Standard access users</div>
-              </div>
-            </div>
-
-            <div className="stat-card stat-card-warning">
-              <div className="stat-icon">📊</div>
-              <div className="stat-content">
-                <div className="stat-value">
-                  {stats.boardsWithDbData}/{stats.totalBoards}
-                </div>
-                <div className="stat-label">Boards in Database</div>
+                <div className="stat-value">{stats.boardsWithDbData}</div>
+                <div className="stat-label">Boards in MongoDB</div>
                 <div className="stat-subtext">
                   {Math.round(
                     (stats.boardsWithDbData / stats.totalBoards) * 100
@@ -183,38 +203,68 @@ function AdminDashboard({ onBack }) {
                 </div>
               </div>
             </div>
-          </div>
-        </div>
 
-        <div className="upload-mode-section">
-          <div className="section-header">
-            <h3 className="section-title">Upload Configuration</h3>
-            <div className="mode-badge">
-              {uploadMode === "db" ? "Database Storage" : "File Storage"}
-            </div>
-          </div>
-          <div className="upload-mode-selector">
-            <div className="mode-options">
-              <button
-                className={`mode-button ${uploadMode === "db" ? "active" : ""}`}
-                onClick={() => setUploadMode("db")}
-              >
-                <span className="mode-icon">💾</span>
-                <span className="mode-text">Database Mode</span>
-                <span className="mode-description">
-                  Store data in MongoDB with version control
-                </span>
-              </button>
-            </div>
-            <div className="mode-info">
-              <div className="info-icon">ℹ️</div>
-              <div className="info-text">
-                {uploadMode === "file"
-                  ? "Files are stored directly in the file system"
-                  : "Excel files are parsed and stored in MongoDB database with audit trail"}
+            <div className="stat-card stat-card-warning">
+              <div className="stat-icon">📁</div>
+              <div className="stat-content">
+                <div className="stat-value">
+                  {stats.fmecaCount}/{stats.coverageCount}
+                </div>
+                <div className="stat-label">Files in MongoDB</div>
+                <div className="stat-subtext">
+                  {stats.fmecaCount} FMECA, {stats.coverageCount} Coverage
+                </div>
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="mongo-info-section">
+          <div className="section-header">
+            <h3 className="section-title">MongoDB Storage</h3>
+            <div className="mongo-badge">
+              <span className="mongo-icon">🍃</span>
+              MongoDB Active
+            </div>
+          </div>
+          <div className="mongo-benefits">
+            <div className="benefit-item">
+              <span className="benefit-icon">⚡</span>
+              <div className="benefit-text">
+                <strong>High Performance</strong>
+                <p>Fast queries and data retrieval</p>
+              </div>
+            </div>
+            <div className="benefit-item">
+              <span className="benefit-icon">🔄</span>
+              <div className="benefit-text">
+                <strong>Version Control</strong>
+                <p>Track changes with automatic versioning</p>
+              </div>
+            </div>
+            <div className="benefit-item">
+              <span className="benefit-icon">🔍</span>
+              <div className="benefit-text">
+                <strong>Advanced Search</strong>
+                <p>Full-text and complex query support</p>
+              </div>
+            </div>
+            <div className="benefit-item">
+              <span className="benefit-icon">📈</span>
+              <div className="benefit-text">
+                <strong>Scalable</strong>
+                <p>Handles large datasets efficiently</p>
+              </div>
+            </div>
+          </div>
+          {stats.latestUpload && (
+            <div className="latest-upload">
+              <span className="latest-label">Latest Upload:</span>
+              <span className="latest-date">
+                {formatDate(stats.latestUpload)}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="tabs-section">
@@ -230,8 +280,8 @@ function AdminDashboard({ onBack }) {
               className={`tab-button ${activeTab === "files" ? "active" : ""}`}
               onClick={() => setActiveTab("files")}
             >
-              <span className="tab-icon">📁</span>
-              <span className="tab-text">File Upload</span>
+              <span className="tab-icon">💾</span>
+              <span className="tab-text">MongoDB Upload</span>
             </button>
           </div>
 
@@ -240,7 +290,6 @@ function AdminDashboard({ onBack }) {
               <UserManagement onUpdate={fetchDashboardStats} />
             ) : (
               <FileUpload
-                uploadMode={uploadMode}
                 onUploadToDatabase={handleUploadToDatabase}
                 onGetDbStatus={getBoardDbStatus}
               />
