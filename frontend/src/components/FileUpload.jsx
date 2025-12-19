@@ -16,7 +16,7 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
     name: "",
     description: "",
     image_path: "",
-    category: "main" // or could be "subsystem", "component", etc.
+    category: "main", // or could be "subsystem", "component", etc.
   });
   const [addingBoard, setAddingBoard] = useState(false);
 
@@ -50,12 +50,12 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
       const response = await axios.get(`${URL}/board/${boardId}/files`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      
+
       const dbStatus = await onGetDbStatus(boardId);
-      
+
       setBoardStatus({
         ...response.data,
-        ...dbStatus
+        ...dbStatus,
       });
     } catch (error) {
       console.error("Error fetching board status:", error);
@@ -85,7 +85,7 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
 
       fetchBoardStatus(selectedBoard);
       fetchBoards();
-      
+
       alert("✅ File uploaded to MongoDB successfully!");
     } catch (error) {
       console.error("Upload error:", error);
@@ -111,28 +111,24 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
     setAddingBoard(true);
 
     try {
-      const response = await axios.post(
-        `${URL}/boards`,
-        newBoardData,
-        {
-          headers: { 
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-        }
-      );
+      const response = await axios.post(`${URL}/boards`, newBoardData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
 
       alert(`✅ Board "${newBoardData.name}" added successfully!`);
-      
+
       // Reset form
       setNewBoardData({
         name: "",
         description: "",
         image_path: "",
-        category: "main"
+        category: "main",
       });
       setShowAddBoardForm(false);
-      
+
       // Refresh boards list and select the new board
       await fetchBoards();
       if (response.data.id) {
@@ -141,7 +137,9 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
     } catch (error) {
       console.error("Error adding board:", error);
       alert(
-        `❌ Failed to add board: ${error.response?.data?.detail || error.message}`
+        `❌ Failed to add board: ${
+          error.response?.data?.detail || error.message
+        }`
       );
     } finally {
       setAddingBoard(false);
@@ -187,7 +185,7 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
         <div className="form-group">
           <div className="board-selection-header">
             <label>Select Board:</label>
-            <button 
+            <button
               className="add-board-button"
               onClick={() => setShowAddBoardForm(true)}
             >
@@ -195,17 +193,19 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
               Add New Board
             </button>
           </div>
-          
+
           {showAddBoardForm ? (
             <div className="add-board-form">
               <h4>Add New Board</h4>
-              
+
               <div className="form-input-group">
                 <label>Board Name *</label>
                 <input
                   type="text"
                   value={newBoardData.name}
-                  onChange={(e) => setNewBoardData({...newBoardData, name: e.target.value})}
+                  onChange={(e) =>
+                    setNewBoardData({ ...newBoardData, name: e.target.value })
+                  }
                   placeholder="Enter board name (e.g., Main Control Board)"
                   className="board-input"
                 />
@@ -216,7 +216,12 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
                 <input
                   type="text"
                   value={newBoardData.description}
-                  onChange={(e) => setNewBoardData({...newBoardData, description: e.target.value})}
+                  onChange={(e) =>
+                    setNewBoardData({
+                      ...newBoardData,
+                      description: e.target.value,
+                    })
+                  }
                   placeholder="Enter board description"
                   className="board-input"
                 />
@@ -227,38 +232,54 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
                 <input
                   type="url"
                   value={newBoardData.image_path}
-                  onChange={(e) => setNewBoardData({...newBoardData, image_path: e.target.value})}
+                  onChange={(e) =>
+                    setNewBoardData({
+                      ...newBoardData,
+                      image_path: e.target.value,
+                    })
+                  }
                   placeholder="https://cdn.example.com/board-image.jpg"
                   className="board-input"
                 />
                 <small className="input-hint">
                   Enter the full URL to the board image (JPG, PNG, or SVG)
                 </small>
-                
-                {newBoardData.image_path && validateImageUrl(newBoardData.image_path) && (
-                  <div className="image-preview">
-                    <p className="preview-label">Image Preview:</p>
-                    <img 
-                      src={newBoardData.image_path} 
-                      alt="Board preview" 
-                      className="preview-image"
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.nextElementSibling?.style.display = 'block';
-                      }}
-                    />
-                    <div className="preview-fallback" style={{display: 'none'}}>
-                      ⚠️ Image cannot be loaded. Please check the URL.
+
+                {newBoardData.image_path &&
+                  validateImageUrl(newBoardData.image_path) && (
+                    <div className="image-preview">
+                      <p className="preview-label">Image Preview:</p>
+                      <img
+                        src={newBoardData.image_path}
+                        alt="Board preview"
+                        className="preview-image"
+                        onError={(e) => {
+                          e.target.style.display = "none";
+                          if (e.target.nextElementSibling) {
+                            e.target.nextElementSibling.style.display = "block";
+                          }
+                        }}
+                      />
+                      <div
+                        className="preview-fallback"
+                        style={{ display: "none" }}
+                      >
+                        ⚠️ Image cannot be loaded. Please check the URL.
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
               </div>
 
               <div className="form-input-group">
                 <label>Category</label>
                 <select
                   value={newBoardData.category}
-                  onChange={(e) => setNewBoardData({...newBoardData, category: e.target.value})}
+                  onChange={(e) =>
+                    setNewBoardData({
+                      ...newBoardData,
+                      category: e.target.value,
+                    })
+                  }
                   className="board-input"
                 >
                   <option value="main">Main Board</option>
@@ -279,7 +300,11 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
                 <button
                   className="save-board-button"
                   onClick={handleAddBoard}
-                  disabled={addingBoard || !newBoardData.name.trim() || !newBoardData.image_path.trim()}
+                  disabled={
+                    addingBoard ||
+                    !newBoardData.name.trim() ||
+                    !newBoardData.image_path.trim()
+                  }
                 >
                   {addingBoard ? "Adding..." : "Save Board"}
                 </button>
@@ -294,7 +319,7 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
               <option value="">-- Select a Board --</option>
               {boards.map((board) => (
                 <option key={board.id} value={board.id}>
-                  {board.name} {board.category ? `(${board.category})` : ''}
+                  {board.name} {board.category ? `(${board.category})` : ""}
                 </option>
               ))}
             </select>
@@ -327,18 +352,18 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
                 </span>
               </div>
             </div>
-            
+
             {boards.find((b) => b.id == selectedBoard)?.image_path && (
               <div className="current-board-image">
                 <p className="image-label">Current Board Image:</p>
-                <img 
-                  src={boards.find((b) => b.id == selectedBoard).image_path} 
+                <img
+                  src={boards.find((b) => b.id == selectedBoard).image_path}
                   alt="Board"
                   className="board-thumbnail"
                 />
-                <a 
-                  href={boards.find((b) => b.id == selectedBoard).image_path} 
-                  target="_blank" 
+                <a
+                  href={boards.find((b) => b.id == selectedBoard).image_path}
+                  target="_blank"
                   rel="noopener noreferrer"
                   className="image-link"
                 >
@@ -398,10 +423,13 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
 
             <div className="upload-info">
               <p>
-                <strong>Note:</strong> Excel files will be converted to JSON and stored in MongoDB database for faster queries and better data management.
+                <strong>Note:</strong> Excel files will be converted to JSON and
+                stored in MongoDB database for faster queries and better data
+                management.
               </p>
               <p className="db-info">
-                💡 MongoDB storage allows versioning, faster queries, and better data management.
+                💡 MongoDB storage allows versioning, faster queries, and better
+                data management.
               </p>
             </div>
           </>
@@ -410,9 +438,7 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
 
       <div className="database-info">
         <h4>MongoDB Database Benefits</h4>
-        <p>
-          Storing your Excel data in MongoDB provides these advantages:
-        </p>
+        <p>Storing your Excel data in MongoDB provides these advantages:</p>
         <ul>
           <li>⚡ Faster data retrieval and queries</li>
           <li>📊 Version history tracking</li>
