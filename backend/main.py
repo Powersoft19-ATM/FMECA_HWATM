@@ -15,6 +15,7 @@ import json
 import pandas as pd
 import logging
 import re
+import jwt
 
 # Load environment variables
 load_dotenv()
