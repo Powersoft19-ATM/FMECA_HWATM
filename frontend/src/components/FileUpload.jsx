@@ -218,19 +218,6 @@ function FileUpload({ onUploadToDatabase, onGetDbStatus }) {
       </div>
 
       <div className="database-info">
-        <h4>MongoDB Database Benefits</h4>
-        <p>Storing your Excel data in MongoDB provides these advantages:</p>
-        <ul>
-          <li>⚡ Faster data retrieval and queries</li>
-          <li>📊 Version history tracking</li>
-          <li>🔍 Advanced search capabilities</li>
-          <li>📈 Scalability for large datasets</li>
-          <li>✅ Data validation and consistency</li>
-          <li>🔄 Real-time data updates</li>
-          <li>🔗 Better relationships between data</li>
-          <li>📝 Structured JSON storage</li>
-        </ul>
-
         {selectedBoard && boardStatus.fmeca_in_db && (
           <div className="db-details">
             <h5>MongoDB Details:</h5>

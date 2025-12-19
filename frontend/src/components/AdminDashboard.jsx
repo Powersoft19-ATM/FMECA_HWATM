@@ -227,36 +227,6 @@ function AdminDashboard({ onBack }) {
               MongoDB Active
             </div>
           </div>
-          <div className="mongo-benefits">
-            <div className="benefit-item">
-              <span className="benefit-icon">⚡</span>
-              <div className="benefit-text">
-                <strong>High Performance</strong>
-                <p>Fast queries and data retrieval</p>
-              </div>
-            </div>
-            <div className="benefit-item">
-              <span className="benefit-icon">🔄</span>
-              <div className="benefit-text">
-                <strong>Version Control</strong>
-                <p>Track changes with automatic versioning</p>
-              </div>
-            </div>
-            <div className="benefit-item">
-              <span className="benefit-icon">🔍</span>
-              <div className="benefit-text">
-                <strong>Advanced Search</strong>
-                <p>Full-text and complex query support</p>
-              </div>
-            </div>
-            <div className="benefit-item">
-              <span className="benefit-icon">📈</span>
-              <div className="benefit-text">
-                <strong>Scalable</strong>
-                <p>Handles large datasets efficiently</p>
-              </div>
-            </div>
-          </div>
           {stats.latestUpload && (
             <div className="latest-upload">
               <span className="latest-label">Latest Upload:</span>
