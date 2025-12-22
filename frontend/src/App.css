@@ -875,7 +875,7 @@
 }
 
 .stat-card {
-  background: gray;
+  background: #3e4b63;
   color: white;
   border-radius: 10px;
   padding: 20px;
@@ -891,15 +891,15 @@
 }
 
 .stat-card:nth-child(2) {
-  background: gray;
+  background: #3e4b63;
 }
 
 .stat-card:nth-child(3) {
-  background: gray;
+  background: #3e4b63;
 }
 
 .stat-card:nth-child(4) {
-  background: gray;
+  background: #3e4b63;
 }
 
 .stat-icon {
