@@ -49,11 +49,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# File upload configuration
+# File upload configuration (only for images if needed)
 UPLOAD_DIR = Path("uploads")
-BOARDS_DIR = Path("boards")
 UPLOAD_DIR.mkdir(exist_ok=True)
-BOARDS_DIR.mkdir(exist_ok=True)
 
 ALLOWED_EXTENSIONS = {
     'excel': ['.xlsx', '.xls'],
@@ -115,7 +113,6 @@ class UserCreateRequest(BaseModel):
 class FileUploadResponse(BaseModel):
     message: str
     filename: str
-    file_path: str
     file_size: int
 
 class BoardFileInfo(BaseModel):
@@ -126,9 +123,6 @@ class BoardFileInfo(BaseModel):
     image_exists: bool
     fmeca_db_exists: bool
     coverage_db_exists: bool
-    fmeca_path: Optional[str] = None
-    coverage_path: Optional[str] = None
-    image_path: Optional[str] = None
 
 class ExcelUploadRequest(BaseModel):
     file_type: str  # "fmeca" or "coverage"
@@ -145,64 +139,46 @@ class ExcelDataResponse(BaseModel):
     record_count: int
     data: Dict[str, Any]
 
-# ================ PASTE YOUR UPLOADCARE URLs HERE ================
+# ================ BOARD CONFIGURATION (Only image URLs, no local files) ================
 BOARD_CONFIG = {
     1: {
         "name": "IMD", 
-        "fmeca_file": "boards/IMD/fmeca.xlsx", 
-        "coverage_file": "boards/IMD/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/09dd149e-eda2-4e75-87a4-a5c0462f3df9/IMD.png"
     },
     2: {
         "name": "SCR", 
-        "fmeca_file": "boards/SCR/fmeca.xlsx", 
-        "coverage_file": "boards/SCR/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/44528739-def7-42ce-8c14-5878b0885312/SCR.png"
     },
     3: {
         "name": "PHTR", 
-        "fmeca_file": "boards/PHTR/fmeca.xlsx", 
-        "coverage_file": "boards/PHTR/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/33880cfd-c882-4020-9ce8-b443a4e84842/PHTR.png"
     },
     4: {
         "name": "VSLD", 
-        "fmeca_file": "boards/VSLD/fmeca.xlsx", 
-        "coverage_file": "boards/VSLD/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/4a9f5c1e-ce38-417f-850d-49673132d669/VSLD.png"
     },
     5: {
         "name": "CLBD", 
-        "fmeca_file": "boards/CLBD/fmeca.xlsx", 
-        "coverage_file": "boards/CLBD/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/70caf3ed-bb93-4049-a47c-a26f9fd0a74e/CLBD.png"
     },
     6: {
         "name": "SVMC", 
-        "fmeca_file": "boards/SVMC/fmeca.xlsx", 
-        "coverage_file": "boards/SVMC/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/b704f94b-6aed-469e-8781-0c16517da575/SVMC.png"
     },
     7: {
         "name": "IPSI", 
-        "fmeca_file": "boards/IPSI/fmeca.xlsx", 
-        "coverage_file": "boards/IPSI/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/a842e819-070c-41eb-bf3b-8ef47ad91d13/IPSI.png"
     },
     8: {
         "name": "MPS", 
-        "fmeca_file": "boards/MPS/fmeca.xlsx", 
-        "coverage_file": "boards/MPS/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/3de983c7-3d1d-4e9f-ab7f-f4c1bf24d5a3/MPS.png"
     },
     9: {
         "name": "CC", 
-        "fmeca_file": "boards/CC/fmeca.xlsx", 
-        "coverage_file": "boards/CC/coverage.xlsx",
         "image_url": "https://2i5aozhtbd.ucarecd.net/c3794c37-c4bb-42c6-8301-4f5d188cbf40/CC.png"
     }
 }
-# ================ END: PASTE YOUR UPLOADCARE URLs ================
+# ================ END: BOARD CONFIGURATION ================
 
 # Startup event
 @app.on_event("startup")
@@ -211,7 +187,6 @@ async def startup_db_client():
     init_default_users()
     create_excel_indexes()
     print("✅ MongoDB initialized with default users")
-    print("✅ Upload directories created")
     print("✅ Excel files indexes created")
 
 # Create indexes for excel files collection
@@ -229,21 +204,9 @@ def allowed_file(filename: str, file_type: str = 'excel') -> bool:
     ext = filename.lower().rsplit('.', 1)[1]
     return f'.{ext}' in ALLOWED_EXTENSIONS.get(file_type, [])
 
-def save_upload_file(upload_file: UploadFile, destination: Path) -> str:
-    """Save uploaded file"""
-    try:
-        with destination.open("wb") as buffer:
-            shutil.copyfileobj(upload_file.file, buffer)
-        return str(destination)
-    finally:
-        upload_file.file.close()
-
-def get_file_size(file_path: str) -> int:
-    """Get file size in bytes"""
-    try:
-        return os.path.getsize(file_path)
-    except:
-        return 0
+def get_file_size_from_bytes(content: bytes) -> int:
+    """Get file size from bytes"""
+    return len(content)
 
 def create_colored_placeholder(board_name: str, board_id: int) -> Optional[str]:
     """Create a colored placeholder image"""
@@ -272,44 +235,25 @@ def create_colored_placeholder(board_name: str, board_id: int) -> Optional[str]:
         return None
 
 def load_board_image(board_id: int) -> Optional[str]:
-    """Load board image from Uploadcare CDN or local fallback"""
+    """Load board image from Uploadcare CDN or create placeholder"""
     board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         return None
     
     board_name = board_config["name"]
     
-    # 1. FIRST PRIORITY: Use Uploadcare URL if available
+    # Use Uploadcare URL if available
     if "image_url" in board_config and board_config["image_url"]:
         uploadcare_url = board_config["image_url"]
         print(f"✅ Using Uploadcare image for {board_name}: {uploadcare_url}")
         return uploadcare_url
     
-    # 2. FALLBACK: Check for locally uploaded images
-    board_dir = BOARDS_DIR / board_name
-    board_dir.mkdir(exist_ok=True)
-    
-    image_extensions = ALLOWED_EXTENSIONS['image']
-    for ext in image_extensions:
-        image_path = board_dir / f"{board_name}{ext}"
-        if image_path.exists():
-            try:
-                print(f"⚠️ Using local image for {board_name}")
-                with open(image_path, "rb") as image_file:
-                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                    ext = image_path.suffix.lower()
-                    mime_type = f"image/{ext[1:]}" if ext != '.jpg' else "image/jpeg"
-                    return f"data:{mime_type};base64,{encoded_string}"
-            except Exception as e:
-                print(f"❌ Error loading local image {image_path}: {e}")
-                continue
-    
-    # 3. FINAL FALLBACK: Create colored placeholder
+    # Create colored placeholder
     print(f"⚠️ No image found for {board_name}, using placeholder")
     return create_colored_placeholder(board_name, board_id)
 
 def check_board_files(board_id: int) -> dict:
-    """Check what files exist for a board"""
+    """Check what files exist for a board in database only"""
     board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         return {"fmeca_exists": False, "coverage_exists": False, "image_exists": False,
@@ -317,21 +261,7 @@ def check_board_files(board_id: int) -> dict:
     
     board_name = board_config["name"]
     
-    fmeca_exists = Path(board_config["fmeca_file"]).exists()
-    coverage_exists = Path(board_config["coverage_file"]).exists()
-    
-    # Check for image
-    image_exists = False
-    if "image_url" in board_config and board_config["image_url"]:
-        image_exists = True
-    else:
-        for ext in ALLOWED_EXTENSIONS['image']:
-            if (BOARDS_DIR / board_name / f"{board_name}{ext}").exists() or \
-               (BOARDS_DIR / f"{board_name}{ext}").exists():
-                image_exists = True
-                break
-    
-    # Check if data exists in database
+    # Check if data exists in database only (no local files)
     fmeca_db_exists = excel_files_collection.count_documents({
         "board_id": board_id, 
         "file_type": "fmeca"
@@ -342,54 +272,32 @@ def check_board_files(board_id: int) -> dict:
         "file_type": "coverage"
     }) > 0
     
+    # Check for image
+    image_exists = False
+    if "image_url" in board_config and board_config["image_url"]:
+        image_exists = True
+    
     return {
-        "fmeca_exists": fmeca_exists,
-        "coverage_exists": coverage_exists,
+        "fmeca_exists": fmeca_db_exists,  # Now refers to DB only
+        "coverage_exists": coverage_db_exists,  # Now refers to DB only
         "image_exists": image_exists,
         "fmeca_db_exists": fmeca_db_exists,
         "coverage_db_exists": coverage_db_exists
     }
 
 def load_main_data(board_id: int) -> pd.DataFrame:
-    """Load FMECA data for specific board - Try DB first, then file"""
+    """Load FMECA data for specific board - Only from database"""
     try:
-        # First try to load from database
+        # Load from database only
         df_from_db = load_main_data_from_db(board_id)
         if not df_from_db.empty:
             return df_from_db
         
-        # Fallback to file system
-        board_config = BOARD_CONFIG.get(board_id)
-        if not board_config:
-            raise HTTPException(status_code=404, detail="Board not found")
+        print(f"❌ No FMECA data found in database for board {board_id}")
+        return pd.DataFrame()
         
-        fmeca_file = board_config["fmeca_file"]
-        print(f"📂 Loading FMECA file from disk: {fmeca_file}")
-        
-        if not os.path.exists(fmeca_file):
-            print(f"❌ FMECA file not found: {fmeca_file}")
-            return pd.DataFrame()
-        
-        sheet_names = ['DFMECA', 'Sheet1', 'FMECA', 'Data']
-        df = None
-        
-        for sheet in sheet_names:
-            try:
-                df = pd.read_excel(fmeca_file, sheet_name=sheet)
-                print(f" Loaded from sheet: {sheet}")
-                break
-            except:
-                continue
-        
-        if df is None:
-            df = pd.read_excel(fmeca_file)
-            print(" Loaded from first available sheet")
-        
-        df = df.ffill()
-        print(f" FMECA data loaded from file: {len(df)} rows")
-        return df
     except Exception as e:
-        print(f" Error loading FMECA data: {e}")
+        print(f"❌ Error loading FMECA data: {e}")
         return pd.DataFrame()
 
 def load_main_data_from_db(board_id: int) -> pd.DataFrame:
@@ -421,42 +329,16 @@ def load_main_data_from_db(board_id: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 def load_reference_data(board_id: int) -> pd.DataFrame:
-    """Load coverage data for specific board - Try DB first, then file"""
+    """Load coverage data for specific board - Only from database"""
     try:
-        # First try to load from database
+        # Load from database only
         df_from_db = load_reference_data_from_db(board_id)
         if not df_from_db.empty:
             return df_from_db
         
-        # Fallback to file system
-        board_config = BOARD_CONFIG.get(board_id)
-        if not board_config:
-            raise HTTPException(status_code=404, detail="Board not found")
+        print(f"❌ No coverage data found in database for board {board_id}")
+        return pd.DataFrame()
         
-        coverage_file = board_config["coverage_file"]
-        print(f"📂 Loading coverage file from disk: {coverage_file}")
-        
-        if not os.path.exists(coverage_file):
-            print(f"❌ Coverage file not found: {coverage_file}")
-            return pd.DataFrame()
-        
-        sheet_names = ['iiGD board', 'Sheet1', 'Coverage', 'Data', 'ATM']
-        ref_df = None
-        
-        for sheet in sheet_names:
-            try:
-                ref_df = pd.read_excel(coverage_file, sheet_name=sheet)
-                print(f"✅ Loaded from sheet: {sheet}")
-                break
-            except:
-                continue
-        
-        if ref_df is None:
-            ref_df = pd.read_excel(coverage_file)
-            print("✅ Loaded from first available sheet")
-        
-        print(f"✅ Coverage data loaded from file: {len(ref_df)} rows")
-        return ref_df
     except Exception as e:
         print(f"❌ Error loading coverage data: {e}")
         return pd.DataFrame()
@@ -558,13 +440,12 @@ def get_admin_user(current_user: UserInDB = Depends(get_current_active_user)) ->
 # ==================== AUTHENTICATION ENDPOINTS ====================
 
 @app.post("/token", response_model=Token)
-@app.post("/token", response_model=Token)
 async def login_for_access_token(
-    username: str = Form(...),      # Changed from OAuth2PasswordRequestForm
-    password: str = Form(...)       # Changed from OAuth2PasswordRequestForm
+    username: str = Form(...),
+    password: str = Form(...)
 ):
     """Login endpoint - returns JWT token"""
-    user = authenticate_user(username,password)
+    user = authenticate_user(username, password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -851,14 +732,6 @@ async def upload_excel_to_database(
         # Save to MongoDB
         result = excel_files_collection.insert_one(excel_record)
         
-        # Also save the original file locally (optional)
-        board_dir = BOARDS_DIR / board_config["name"]
-        board_dir.mkdir(exist_ok=True)
-        
-        file_path = board_dir / f"{file_type}.xlsx"
-        with open(file_path, "wb") as buffer:
-            buffer.write(contents)
-        
         return {
             "message": "Excel file uploaded and stored in database successfully",
             "file_id": file_id,
@@ -994,7 +867,7 @@ async def upload_fmeca_file(
     file: UploadFile = File(...),
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Upload FMECA Excel file for a board"""
+    """Upload FMECA Excel file for a board (to database only)"""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can upload files")
     
@@ -1005,27 +878,13 @@ async def upload_fmeca_file(
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
-    # Create board directory
-    board_dir = BOARDS_DIR / board_config["name"]
-    board_dir.mkdir(exist_ok=True)
-    
-    # Save file
-    file_path = board_dir / "fmeca.xlsx"
-    try:
-        save_upload_file(file, file_path)
-        file_size = get_file_size(file_path)
-        
-        # Update board config
-        BOARD_CONFIG[board_id]["fmeca_file"] = str(file_path)
-        
-        return FileUploadResponse(
-            message="FMECA file uploaded successfully",
-            filename=file.filename,
-            file_path=str(file_path),
-            file_size=file_size
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+    # Use the excel-to-db endpoint logic
+    return await upload_excel_to_database(
+        board_id=board_id,
+        file_type="fmeca",
+        file=file,
+        current_user=current_user
+    )
 
 @app.post("/upload/board/{board_id}/coverage")
 async def upload_coverage_file(
@@ -1033,7 +892,7 @@ async def upload_coverage_file(
     file: UploadFile = File(...),
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Upload coverage Excel file for a board"""
+    """Upload coverage Excel file for a board (to database only)"""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can upload files")
     
@@ -1044,73 +903,20 @@ async def upload_coverage_file(
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
     
-    # Create board directory
-    board_dir = BOARDS_DIR / board_config["name"]
-    board_dir.mkdir(exist_ok=True)
-    
-    # Save file
-    file_path = board_dir / "coverage.xlsx"
-    try:
-        save_upload_file(file, file_path)
-        file_size = get_file_size(file_path)
-        
-        # Update board config
-        BOARD_CONFIG[board_id]["coverage_file"] = str(file_path)
-        
-        return FileUploadResponse(
-            message="Coverage file uploaded successfully",
-            filename=file.filename,
-            file_path=str(file_path),
-            file_size=file_size
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
-
-@app.post("/upload/board/{board_id}/image")
-async def upload_board_image(
-    board_id: int,
-    file: UploadFile = File(...),
-    current_user: UserInDB = Depends(get_current_active_user)
-):
-    """Upload image for a board"""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can upload files")
-    
-    if not allowed_file(file.filename, 'image'):
-        raise HTTPException(status_code=400, detail="Only image files are allowed (.png, .jpg, .jpeg, .gif, .bmp)")
-    
-    board_config = BOARD_CONFIG.get(board_id)
-    if not board_config:
-        raise HTTPException(status_code=404, detail="Board not found")
-    
-    # Create board directory
-    board_dir = BOARDS_DIR / board_config["name"]
-    board_dir.mkdir(exist_ok=True)
-    
-    # Get file extension
-    ext = file.filename.lower().rsplit('.', 1)[1]
-    
-    # Save file
-    file_path = board_dir / f"{board_config['name']}.{ext}"
-    try:
-        save_upload_file(file, file_path)
-        file_size = get_file_size(file_path)
-        
-        return FileUploadResponse(
-            message="Board image uploaded successfully",
-            filename=file.filename,
-            file_path=str(file_path),
-            file_size=file_size
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+    # Use the excel-to-db endpoint logic
+    return await upload_excel_to_database(
+        board_id=board_id,
+        file_type="coverage",
+        file=file,
+        current_user=current_user
+    )
 
 @app.get("/board/{board_id}/files", response_model=BoardFileInfo)
 async def get_board_file_info(
     board_id: int,
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Get information about files for a board"""
+    """Get information about files for a board (database only)"""
     board_config = BOARD_CONFIG.get(board_id)
     if not board_config:
         raise HTTPException(status_code=404, detail="Board not found")
@@ -1124,53 +930,8 @@ async def get_board_file_info(
         coverage_exists=file_info["coverage_exists"],
         image_exists=file_info["image_exists"],
         fmeca_db_exists=file_info["fmeca_db_exists"],
-        coverage_db_exists=file_info["coverage_db_exists"],
-        fmeca_path=board_config["fmeca_file"] if file_info["fmeca_exists"] else None,
-        coverage_path=board_config["coverage_file"] if file_info["coverage_exists"] else None,
-        image_path=None
+        coverage_db_exists=file_info["coverage_db_exists"]
     )
-
-@app.delete("/board/{board_id}/files/{file_type}")
-async def delete_board_file(
-    board_id: int,
-    file_type: str,  # fmeca, coverage, or image
-    current_user: UserInDB = Depends(get_current_active_user)
-):
-    """Delete a file for a board (admin only)"""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can delete files")
-    
-    board_config = BOARD_CONFIG.get(board_id)
-    if not board_config:
-        raise HTTPException(status_code=404, detail="Board not found")
-    
-    file_path = None
-    if file_type == "fmeca":
-        file_path = Path(board_config["fmeca_file"])
-    elif file_type == "coverage":
-        file_path = Path(board_config["coverage_file"])
-    elif file_type == "image":
-        board_dir = BOARDS_DIR / board_config["name"]
-        for ext in ALLOWED_EXTENSIONS['image']:
-            test_path = board_dir / f"{board_config['name']}{ext}"
-            if test_path.exists():
-                file_path = test_path
-                break
-        if not file_path:
-            test_path = BOARDS_DIR / f"{board_config['name']}.png"
-            if test_path.exists():
-                file_path = test_path
-    else:
-        raise HTTPException(status_code=400, detail="Invalid file type")
-    
-    if not file_path or not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    try:
-        file_path.unlink()
-        return {"message": f"{file_type.capitalize()} file deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
 
 # ==================== BOARD MANAGEMENT ENDPOINTS ====================
 
@@ -1180,12 +941,12 @@ async def root():
     return {
         "message": "FMECA-HWATM Integrations API",
         "version": "2.0.0",
-        "features": ["User Management", "File Upload", "FMECA Analysis", "Database Storage"]
+        "features": ["User Management", "File Upload to Database", "FMECA Analysis", "Database Storage Only"]
     }
 
 @app.get("/boards", response_model=List[BoardInfo])
 async def get_boards(current_user: UserInDB = Depends(get_current_active_user)):
-    """Get all boards with file status"""
+    """Get all boards with file status (database only)"""
     print("🎯 /boards API called")
     boards = []
     for board_id, board_config in BOARD_CONFIG.items():
@@ -1214,7 +975,7 @@ async def get_fmeca_data(
     filter_request: FilterRequest,
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Get FMECA data for a board with filtering"""
+    """Get FMECA data for a board with filtering (from database only)"""
     try:
         print(f"📊 FMECA data requested for board {board_id} with filter {filter_request.filter_type}")
         
@@ -1222,10 +983,10 @@ async def get_fmeca_data(
         ref_df = load_reference_data(board_id)
         
         if df.empty:
-            return {"data": [], "count": 0, "message": "No FMECA data found"}
+            return {"data": [], "count": 0, "message": "No FMECA data found in database"}
         
         if ref_df.empty:
-            return {"data": [], "count": 0, "message": "No coverage data found"}
+            return {"data": [], "count": 0, "message": "No coverage data found in database"}
         
         # Find relevant columns
         id_col = None
@@ -1328,7 +1089,7 @@ async def atm_check(
     board_id: int,
     current_user: UserInDB = Depends(get_current_active_user)
 ):
-    """Perform ATM check for a board"""
+    """Perform ATM check for a board (from database only)"""
     try:
         print(f"🏧 ATM check requested for board {board_id}")
         
@@ -1338,7 +1099,7 @@ async def atm_check(
         if df.empty or ref_df.empty:
             return ATMResponse(
                 missing_components=[],
-                message="Excel files not found or empty"
+                message="No data found in database"
             )
         
         designator_col = None
