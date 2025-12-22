@@ -168,7 +168,6 @@ function AdminDashboard({ onBack }) {
 
       <div className="dashboard-grid">
         <div className="stats-section">
-          <h3 className="section-title">MongoDB Overview</h3>
           <div className="stats-grid">
             <div className="stat-card stat-card-primary">
               <div className="stat-icon">👥</div>
@@ -194,7 +193,7 @@ function AdminDashboard({ onBack }) {
               <div className="stat-icon">💾</div>
               <div className="stat-content">
                 <div className="stat-value">{stats.boardsWithDbData}</div>
-                <div className="stat-label">Boards in MongoDB</div>
+                <div className="stat-label">Boards in Uploadcare</div>
                 <div className="stat-subtext">
                   {Math.round(
                     (stats.boardsWithDbData / stats.totalBoards) * 100
